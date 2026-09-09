@@ -26,6 +26,9 @@
  */
 
 export { attachWebMCP, detectModelContext, DEFAULT_PREFIX } from './register.js';
+export { createToolRuntime, buildHostToolDescriptors } from './runtime.js';
+export { createApprovalGate, summarizeCommands, GateBusyError } from './gate.js';
+export type { ApprovalGate, GateRequest, CreateGateOptions } from './gate.js';
 export {
   buildToolDescriptors,
   describeCommand,
@@ -59,5 +62,10 @@ export type {
   RunStatus,
   WebMCPOptions,
   WebMCPMountOptions,
-  WebMCPHandle
+  WebMCPHandle,
+  HostHooks,
+  HostToolDescriptor,
+  ToolPreview,
+  ToolRuntime,
+  ToolRuntimeOptions
 } from './types.js';

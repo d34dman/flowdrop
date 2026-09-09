@@ -17,6 +17,8 @@
 
 import type { Command, UIAction } from '../commands/types.js';
 import type { NodeMetadata } from '../types/index.js';
+import type { FlowDropInstance } from '../stores/instanceContainer.svelte.js';
+import type { ApprovalGate } from './gate.js';
 import type { MessagesOverride } from '../messages/types.js';
 
 // ============================================================================
@@ -310,6 +312,86 @@ export type WebMCPMountOptions = Omit<
 > & {
   nodeTypes?: WebMCPOptions['nodeTypes'];
 };
+
+// ============================================================================
+// Tool runtime — shared by the registration and the chat panel
+// ============================================================================
+
+/** The host hooks behind the `save`, `run` and `run_status` tools. */
+export type HostHooks = Pick<WebMCPOptions, 'onSave' | 'onRun' | 'onRunStatus'>;
+
+/**
+ * One host tool (`save`, `run`, `run_status`) as the runtime offers it. Like a
+ * {@link ToolDescriptor} but without `toCommands`: these tools run a hook,
+ * not commands.
+ */
+export interface HostToolDescriptor {
+  verb: 'save' | 'run' | 'run_status';
+  description: string;
+  inputSchema: ToolInputSchema;
+  readOnly: boolean;
+  /** Never covered by "don't ask again for edits"; always asks. */
+  consequential: boolean;
+}
+
+/** What a tool call would do, before it runs — for a transcript or a dialog. */
+export interface ToolPreview {
+  /** The commands the call maps to; empty for a host tool. */
+  commands: Command[];
+  /** True when the call would pass through the approval gate. */
+  mutating: boolean;
+  /** True for `save` and `run`. */
+  consequential: boolean;
+}
+
+export interface ToolRuntimeOptions {
+  instance: FlowDropInstance;
+  /** See {@link WebMCPOptions.nodeTypes}. Defaults to the instance's list. */
+  nodeTypes?: NodeMetadata[] | (() => NodeMetadata[]);
+  /** See {@link WebMCPOptions.onUIAction}. Without it there is no `view` tool. */
+  onUIAction?: (action: UIAction) => void;
+  /** Host hooks; each present hook adds its tool. */
+  hooks?: HostHooks;
+  /**
+   * An existing gate to ask, e.g. the registration's. When omitted the
+   * runtime creates one from `approval`, `container`, `messages` and
+   * `rememberEdits` and disposes it with itself.
+   */
+  gate?: ApprovalGate;
+  approval?: WebMCPApproval;
+  container?: HTMLElement;
+  messages?: MessagesOverride | (() => MessagesOverride);
+  rememberEdits?: boolean;
+}
+
+/**
+ * The tool runtime: every editor tool and host tool of one editor instance
+ * behind a single `runTool(name, input)`. Built by `createToolRuntime`.
+ */
+export interface ToolRuntime {
+  /** Editor tools (commands), in registration order. */
+  readonly descriptors: readonly ToolDescriptor[];
+  /** Host tools present for the supplied hooks, in registration order. */
+  readonly hostTools: readonly HostToolDescriptor[];
+  /** The gate mutating calls pass through. */
+  readonly gate: ApprovalGate;
+  /**
+   * Run a tool by its bare verb (`add_node`, `batch`, `save`, …): validate,
+   * map, gate, execute. Never throws for a bad call — argument errors, a
+   * rejected dialog, an unknown name all come back as an `isError` result the
+   * model can read. Throws only for a bug.
+   */
+  runTool(name: string, input: unknown): Promise<ToolResult>;
+  /**
+   * What `runTool(name, input)` would do, without doing it. `null` for an
+   * unknown tool or arguments the schema refuses.
+   */
+  preview(name: string, input: unknown): ToolPreview | null;
+  /** True after `dispose()`; every later call answers `DETACHED`. */
+  readonly disposed: boolean;
+  /** Dismiss any open dialog (as a rejection) and refuse further calls. */
+  dispose(): void;
+}
 
 /** Returned by `attachWebMCP`. */
 export interface WebMCPHandle {
