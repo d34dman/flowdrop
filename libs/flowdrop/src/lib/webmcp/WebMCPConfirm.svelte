@@ -94,7 +94,10 @@
     align-items: center;
     justify-content: center;
     background: rgb(0 0 0 / 0.4);
-    font-family: inherit;
+    /* Mounted on document.body, outside the editor: no host font to inherit. */
+    font-family: var(--fd-font-sans, system-ui, sans-serif);
+    font-size: var(--fd-text-md, 1rem);
+    line-height: var(--fd-leading-normal, 1.5);
   }
 
   .fd-webmcp-confirm__dialog {

@@ -282,6 +282,12 @@
   --fd-leading-relaxed: 1.6; /* @public */
 
   /* ----- FONT FAMILIES ----- */
+  /* The editor inherits the host page's font. This stack is for UI the
+     library mounts outside the editor's subtree (the WebMCP confirm dialog
+     on document.body), where "inherit" means whatever the host's body has —
+     on Drupal admin themes, the browser's serif fallback. */
+  --fd-font-sans:
+    system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; /* @public */
   --fd-font-mono:
     ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace; /* @public */
 
