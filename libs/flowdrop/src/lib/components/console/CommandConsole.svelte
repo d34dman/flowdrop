@@ -16,6 +16,8 @@
     type ListNodesResultData,
     type ListEdgesResultData,
     type ListTypesResultData,
+    type SearchTypesResultData,
+    type DescribeTypeResultData,
     type InfoResultData,
     type HelpResultData
   } from '../../commands/index.js';
@@ -29,6 +31,8 @@
     formatListNodes,
     formatListEdges,
     formatListTypes,
+    formatSearchTypes,
+    formatDescribeType,
     formatInfo,
     formatHelp
   } from './formatters.js';
@@ -65,6 +69,10 @@
         return formatListEdges(result.data as ListEdgesResultData);
       case 'list_types':
         return formatListTypes(result.data as ListTypesResultData);
+      case 'search_types':
+        return formatSearchTypes(result.data as SearchTypesResultData);
+      case 'describe_type':
+        return formatDescribeType(result.data as DescribeTypeResultData);
       case 'info':
         return formatInfo(result.data as InfoResultData);
       case 'help':

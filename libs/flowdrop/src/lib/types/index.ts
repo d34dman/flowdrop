@@ -852,6 +852,45 @@ export interface NodeMetadata {
    * Allows storing additional configuration and UI state data at the node type level
    */
   extensions?: NodeExtensions;
+  /**
+   * The host's confirmation policy for instances of this type, when the host
+   * publishes one: whether a run pauses for a person before this node acts.
+   * Surfaced to browser agents by `describe_type`; the library never reads it.
+   */
+  confirmation?: NodeConfirmation;
+  /**
+   * What the current user may do with this type, computed by the host and
+   * passed through untouched. `add: false` means `add_node` will be refused
+   * server-side; the tools pre-empt with `FORBIDDEN`.
+   */
+  can?: Record<string, boolean>;
+  /**
+   * Guidance the host writes for agents reading this type — usage notes,
+   * example configurations, types it is usually wired to. Surfaced verbatim by
+   * `describe_type`; the library never interprets it.
+   */
+  agent?: NodeAgentGuidance;
+}
+
+/**
+ * A host's confirmation policy for a node type (see `NodeMetadata.confirmation`).
+ */
+export interface NodeConfirmation {
+  /** `ask` — a run pauses for approval before the node acts; `skip` — it does not. */
+  policy: 'ask' | 'skip';
+  /** Where the policy came from: set on the type, or derived from the plugin. */
+  source?: 'policy' | 'plugin' | string;
+  /** Controls the instance author may exercise (e.g. `waive`, `require`). */
+  authorControls?: string[];
+  /** Controls a runtime input may exercise. */
+  dynamicControls?: string[];
+}
+
+/** Host-written guidance for agents (see `NodeMetadata.agent`). */
+export interface NodeAgentGuidance {
+  usage?: string;
+  examples?: string[];
+  pairsWith?: string[];
 }
 
 /**
@@ -1525,6 +1564,18 @@ export interface Workflow {
   config?: Record<string, unknown>;
   /** Public contract for callers. Absent = the workflow declares no interface. */
   interface?: WorkflowInterface;
+  /**
+   * What the current user may do with this workflow, computed by the host and
+   * passed through untouched (`save`, `run`, …). The browser-agent tools
+   * pre-empt with `FORBIDDEN` when a key is `false`; the server stays the
+   * authority either way.
+   */
+  can?: Record<string, boolean>;
+  /**
+   * The revision the editor loaded, as the host stamps it. Sent back on save
+   * so the server can refuse a stale write with `CONFLICT`.
+   */
+  revision?: string | number;
 }
 
 /**

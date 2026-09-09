@@ -43,7 +43,8 @@ export interface SetConfigCommand {
 export interface GetConfigCommand {
   type: 'get_config';
   nodeId: string;
-  key: string;
+  /** One key; omit to read every value together with the node's config schema. */
+  key?: string;
 }
 
 export interface ConnectCommand {
@@ -77,6 +78,18 @@ export interface ListEdgesCommand {
 
 export interface ListTypesCommand {
   type: 'list_types';
+}
+
+/** Describe one node type — ports, config schema, defaults — before adding it. */
+export interface DescribeTypeCommand {
+  type: 'describe_type';
+  nodeTypeId: string;
+}
+
+/** Find node types by a case-insensitive substring of id, name, description or tags. */
+export interface SearchTypesCommand {
+  type: 'search_types';
+  query: string;
 }
 
 export interface InfoCommand {
@@ -175,6 +188,8 @@ export type Command =
   | ListNodesCommand
   | ListEdgesCommand
   | ListTypesCommand
+  | DescribeTypeCommand
+  | SearchTypesCommand
   | InfoCommand
   | UndoCommand
   | RedoCommand
@@ -252,13 +267,59 @@ export interface ListEdgesResultData {
   }>;
 }
 
+/** One row of list_types / search_types — `typeId` is the short id add_node accepts. */
+export interface TypeSummary {
+  typeId: string;
+  name: string;
+  category: string;
+  description?: string;
+  tags?: string[];
+}
+
 /** Result data for list_types — type IDs are short names usable with add command */
 export interface ListTypesResultData {
-  types: Array<{
-    typeId: string;
-    name: string;
-    category: string;
-  }>;
+  types: TypeSummary[];
+}
+
+/** Result data for search_types — the matching rows, in catalog order */
+export interface SearchTypesResultData {
+  query: string;
+  types: TypeSummary[];
+}
+
+/** One config key as described by describe_type / get_config */
+export interface ConfigKeyDescription {
+  key: string;
+  /** JSON Schema type — a literal, or a list when the schema declares several. */
+  type?: string | string[];
+  title?: string;
+  description?: string;
+  enum?: unknown[];
+  default?: unknown;
+  required?: boolean;
+}
+
+/** One port as described by describe_type */
+export interface PortDescription {
+  portId: string;
+  name: string;
+  dataType: string;
+  required?: boolean;
+  description?: string;
+}
+
+/**
+ * Result data for describe_type — everything an agent needs to know about a
+ * node type before adding one. `confirmation`, `can` and `agent` are passed
+ * through from the host's payload untouched when present.
+ */
+export interface DescribeTypeResultData extends TypeSummary {
+  inputs: PortDescription[];
+  outputs: PortDescription[];
+  config: ConfigKeyDescription[];
+  confirmation?: NodeMetadata['confirmation'];
+  can?: NodeMetadata['can'];
+  agent?: NodeMetadata['agent'];
 }
 
 /** Result data for info command — all IDs are DSL-format short IDs */
@@ -279,11 +340,17 @@ export interface InfoResultData {
   }>;
 }
 
-/** Result data for get_config command */
+/**
+ * Result data for get_config. With a key: that key's `value` and its `schema`
+ * entry. Without one: every current `value` under `values`, and the whole
+ * config `schema` as a list of keys.
+ */
 export interface GetConfigResultData {
   nodeId: string;
-  key: string;
-  value: unknown;
+  key?: string;
+  value?: unknown;
+  values?: Record<string, unknown>;
+  schema?: ConfigKeyDescription | ConfigKeyDescription[];
 }
 
 /** Result data for help command */
@@ -302,11 +369,13 @@ export interface SetConfigResultData {
   value: unknown;
   /** Validation warnings (non-blocking unless strict mode) */
   warnings?: Array<{
-    type: 'enum' | 'type_mismatch';
+    type: 'enum' | 'type_mismatch' | 'unknown_key';
     message: string;
     allowedValues?: unknown[];
     expectedType?: string;
     actualType?: string;
+    /** For `unknown_key`: the keys the node's config schema does declare. */
+    knownKeys?: string[];
   }>;
 }
 
@@ -330,6 +399,8 @@ export type CommandResultData =
   | ListNodesResultData
   | ListEdgesResultData
   | ListTypesResultData
+  | SearchTypesResultData
+  | DescribeTypeResultData
   | InfoResultData
   | GetConfigResultData
   | SetConfigResultData

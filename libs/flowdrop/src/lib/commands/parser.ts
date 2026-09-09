@@ -118,6 +118,14 @@ const rules: ParserRule[] = [
       key: m[2]
     })
   },
+  // get <nodeId> — every config value plus the schema
+  {
+    pattern: /^get\s+([^\s:]+)$/i,
+    parse: (m) => ({
+      type: 'get_config',
+      nodeId: m[1]
+    })
+  },
   // info <nodeId>
   {
     pattern: /^info\s+(\S+)$/i,
@@ -186,6 +194,16 @@ const rules: ParserRule[] = [
   {
     pattern: /^list\s+types$/i,
     parse: () => ({ type: 'list_types' })
+  },
+  // describe <type>
+  {
+    pattern: /^describe\s+(\S+)$/i,
+    parse: (m) => ({ type: 'describe_type', nodeTypeId: m[1] })
+  },
+  // search <text...>
+  {
+    pattern: /^search\s+(.+)$/i,
+    parse: (m) => ({ type: 'search_types', query: m[1].trim() })
   },
   // undo
   {
@@ -337,6 +355,8 @@ export function parseCommand(input: string): ParseResult {
     'connect',
     'disconnect',
     'list',
+    'describe',
+    'search',
     'undo',
     'redo',
     'help',

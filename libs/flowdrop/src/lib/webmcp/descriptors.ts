@@ -48,6 +48,8 @@ export const EXPOSED_COMMAND_TYPES = [
   'list_nodes',
   'list_edges',
   'list_types',
+  'describe_type',
+  'search_types',
   'info',
   'undo',
   'redo',
@@ -81,7 +83,15 @@ export const COMPOSITE_VERBS = ['view', 'batch'] as const;
 // ============================================================================
 
 const NODE_ID_DESCRIPTION =
-  'Node id in short form, e.g. "llm_node.1" — the `nodeId` values returned by list_nodes and add_node. Full ids are accepted too.';
+  'Node id in short form, e.g. "http_request.1" — the `nodeId` values returned by list_nodes and add_node. Full ids are accepted too.';
+
+/**
+ * The recommended call order, appended to every tool that changes the
+ * workflow. For a browser agent the tool descriptions are the whole manual,
+ * so the manual says how the tools fit together.
+ */
+const CALL_ORDER =
+  ' Call describe_type before adding or configuring a type you have not seen; group several changes in one batch; save when done.';
 
 const nodeId = (description = NODE_ID_DESCRIPTION): ToolSchemaProperty => ({
   type: 'string',
@@ -175,13 +185,15 @@ const PORT_PAIR = object(
 /** One record per exposed command, keyed by command type. */
 const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
   add_node: {
-    description: 'Add a node of the given type to the workflow. Returns the new node id.',
+    description:
+      "Add a node of the given type to the workflow. Returns the new node id; the node starts with the type's default config." +
+      CALL_ORDER,
     inputSchema: object(
       {
         nodeTypeId: {
           type: 'string',
           description:
-            'Node type id as returned by list_types (`typeId`), e.g. "llm_node". Call list_types first.'
+            'Node type id as returned by list_types / search_types (`typeId`), e.g. "http_request". Unknown ids fail and name near misses.'
         },
         position: {
           ...position,
@@ -198,13 +210,13 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: (c) => `Add node ${c.nodeTypeId}${c.position ? ` at ${at(c.position)}` : ''}`
   },
   delete_node: {
-    description: 'Delete a node and every edge attached to it.',
+    description: 'Delete a node and every edge attached to it.' + CALL_ORDER,
     inputSchema: object({ nodeId: nodeId() }, ['nodeId']),
     build: (a) => ({ type: 'delete_node', nodeId: a.nodeId as string }),
     summarize: (c) => `Delete node ${c.nodeId}`
   },
   rename_node: {
-    description: 'Change the display label of a node.',
+    description: 'Change the display label of a node.' + CALL_ORDER,
     inputSchema: object(
       { nodeId: nodeId(), label: { type: 'string', description: 'New display label.' } },
       ['nodeId', 'label']
@@ -213,21 +225,22 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: (c) => `Rename ${c.nodeId} to ${q(c.label)}`
   },
   move_node: {
-    description: 'Move a node to a canvas position.',
+    description: 'Move a node to a canvas position.' + CALL_ORDER,
     inputSchema: object({ nodeId: nodeId(), position }, ['nodeId', 'position']),
     build: (a) => ({ type: 'move_node', nodeId: a.nodeId as string, position: a.position as Pos }),
     summarize: (c) => `Move ${c.nodeId} to ${at(c.position)}`
   },
   swap_node: {
     description:
-      'Replace a node with one of another type, keeping compatible connections and config. Reports what was dropped.',
+      'Replace a node with one of another type, keeping compatible connections and config. Reports what was dropped.' +
+      CALL_ORDER,
     inputSchema: object(
       {
         nodeId: nodeId('Node to replace.'),
         newTypeId: {
           type: 'string',
           description:
-            'Replacement node type id (see list_types). Compatible ports and config carry over.'
+            'Replacement node type id (see list_types / describe_type). Compatible ports and config carry over.'
         }
       },
       ['nodeId', 'newTypeId']
@@ -241,13 +254,15 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
   },
   set_config: {
     description:
-      'Set one configuration value on a node. Validation warnings are returned, not fatal, unless strict.',
+      'Set one configuration value on a node. A value outside the enum, of the wrong type, or under a key the schema does not declare is stored with a warning that names the allowed values / keys — fatal only when strict.' +
+      CALL_ORDER,
     inputSchema: object(
       {
         nodeId: nodeId(),
         key: {
           type: 'string',
-          description: 'Config key, as listed under `config` by the info tool.'
+          description:
+            'Config key, as listed under `config` by describe_type (with type, enum and default) or get_config.'
         },
         value: configValue,
         strict: {
@@ -267,17 +282,30 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: (c) => `Set ${c.nodeId}.${c.key} = ${c.value}`
   },
   get_config: {
-    description: 'Read one configuration value from a node.',
+    description:
+      'Read configuration from a node. With `key`: that value and its schema entry (type, enum, default). Without: every current value under `values` plus the whole config schema.',
     inputSchema: object(
-      { nodeId: nodeId(), key: { type: 'string', description: 'Config key to read.' } },
-      ['nodeId', 'key']
+      {
+        nodeId: nodeId(),
+        key: {
+          type: 'string',
+          description: 'Config key to read; omit for all values and the schema.'
+        }
+      },
+      ['nodeId']
     ),
-    build: (a) => ({ type: 'get_config', nodeId: a.nodeId as string, key: a.key as string }),
-    summarize: (c) => `Read ${c.nodeId}.${c.key}`
+    build: (a) => ({
+      type: 'get_config',
+      nodeId: a.nodeId as string,
+      ...(a.key !== undefined ? { key: a.key as string } : {})
+    }),
+    summarize: (c) =>
+      c.key !== undefined ? `Read ${c.nodeId}.${c.key}` : `Read config of ${c.nodeId}`
   },
   connect: {
     description:
-      'Connect an output port of one node to an input port of another. Fails on type mismatch or cycle.',
+      'Connect an output port of one node to an input port of another. An unknown port fails and lists the ports on both sides; the existing edge is kept when the connection is already there.' +
+      CALL_ORDER,
     inputSchema: PORT_PAIR,
     build: (a) => ({
       type: 'connect',
@@ -290,7 +318,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
       `Connect ${c.sourceNodeId}:${c.sourcePort} → ${c.targetNodeId}:${c.targetPort}`
   },
   disconnect_ports: {
-    description: 'Remove the edge between two specific ports.',
+    description: 'Remove the edge between two specific ports.' + CALL_ORDER,
     inputSchema: PORT_PAIR,
     build: (a) => ({
       type: 'disconnect_ports',
@@ -303,7 +331,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
       `Disconnect ${c.sourceNodeId}:${c.sourcePort} → ${c.targetNodeId}:${c.targetPort}`
   },
   disconnect_node: {
-    description: 'Remove every edge attached to a node.',
+    description: 'Remove every edge attached to a node.' + CALL_ORDER,
     inputSchema: object({ nodeId: nodeId() }, ['nodeId']),
     build: (a) => ({ type: 'disconnect_node', nodeId: a.nodeId as string }),
     summarize: (c) => `Disconnect every edge of ${c.nodeId}`
@@ -322,20 +350,44 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
   },
   list_types: {
     description:
-      'List the node types that can be added, with their `typeId`, name and category. Call this before add_node.',
+      'List every node type that can be added: `typeId`, name, category, description, tags. A type not in this list is unavailable in this editor. Use search_types to narrow, describe_type for ports and config.',
     inputSchema: EMPTY,
     build: () => ({ type: 'list_types' }),
     summarize: () => 'List node types'
   },
+  describe_type: {
+    description:
+      'Describe one node type before using it: input and output ports (id, data type, required), config keys (type, enum, default, description), and — when the host publishes them — the confirmation policy (`ask` means a run pauses for a person at this node), what you may do with it (`can`) and host guidance (`agent`). Call this before add_node and set_config.',
+    inputSchema: object(
+      {
+        nodeTypeId: {
+          type: 'string',
+          description:
+            'Node type id (`typeId` from list_types / search_types), e.g. "http_request".'
+        }
+      },
+      ['nodeTypeId']
+    ),
+    build: (a) => ({ type: 'describe_type', nodeTypeId: a.nodeTypeId as string }),
+    summarize: (c) => `Describe type ${c.nodeTypeId}`
+  },
+  search_types: {
+    description:
+      'Find node types by a case-insensitive substring of their id, name, description or tags, e.g. "markdown" or "http". Returns the same rows as list_types.',
+    inputSchema: object({ query: { type: 'string', description: 'Text to look for.' } }, ['query']),
+    build: (a) => ({ type: 'search_types', query: a.query as string }),
+    summarize: (c) => `Search types for ${q(c.query)}`
+  },
   info: {
     description:
-      'Describe one node: type, position, current config, input and output ports, and connected edges.',
+      "Describe one node instance: type, position, current config values, input and output ports, and connected edges. For the type's schema and defaults use describe_type.",
     inputSchema: object({ nodeId: nodeId() }, ['nodeId']),
     build: (a) => ({ type: 'info', nodeId: a.nodeId as string }),
     summarize: (c) => `Describe ${c.nodeId}`
   },
   undo: {
-    description: 'Undo the last change. Each tool call that changed the workflow is one undo step.',
+    description:
+      'Undo the last change. Each tool call that changed the workflow is one undo step; a save cannot be undone.',
     inputSchema: EMPTY,
     build: () => ({ type: 'undo' }),
     summarize: () => 'Undo'
@@ -347,7 +399,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: () => 'Redo'
   },
   auto_layout: {
-    description: 'Re-arrange all nodes automatically. Moves existing nodes.',
+    description: 'Re-arrange all nodes automatically. Moves existing nodes.' + CALL_ORDER,
     inputSchema: object({
       direction: {
         type: 'string',
@@ -362,7 +414,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: (c) => `Auto-layout (${c.direction ?? 'horizontal'})`
   },
   beautify_layout: {
-    description: 'Tidy the layout of all nodes. Moves existing nodes.',
+    description: 'Tidy the layout of all nodes. Moves existing nodes.' + CALL_ORDER,
     inputSchema: EMPTY,
     build: () => ({ type: 'beautify_layout' }),
     summarize: () => 'Beautify layout'
@@ -458,7 +510,7 @@ const BATCH_SCHEMA: ToolInputSchema = object(
     commands: {
       type: 'array',
       description:
-        'Commands to run in order. Each item is the argument object of one tool plus a `type` naming that tool (without the prefix), e.g. {"type":"add_node","nodeTypeId":"llm_node"}. Read-only items are allowed but pointless here.',
+        'Commands to run in order. Each item is the argument object of one tool plus a `type` naming that tool (without the prefix), e.g. {"type":"add_node","nodeTypeId":"http_request"}. Read-only items are allowed but pointless here.',
       items: {
         type: 'object',
         properties: {
@@ -545,7 +597,7 @@ export function buildToolDescriptors(options: BuildDescriptorsOptions = {}): Too
   const batch: ToolDescriptor = {
     verb: 'batch',
     description:
-      'Run several commands as one transaction: all succeed or none apply, and one undo reverts them all. Prefer this over many single calls when building a flow.',
+      'Run several commands as one transaction: all succeed or none apply, one approval covers them all, and one undo reverts them all. Prefer this over many single calls when building a flow — describe the types first, batch the adds, connects and set_configs, then save.',
     inputSchema: BATCH_SCHEMA,
     readOnly: false,
     toCommands: (args) => buildBatchCommands(args, viewEnabled)

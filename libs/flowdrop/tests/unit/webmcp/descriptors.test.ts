@@ -45,6 +45,8 @@ const ALL_COMMAND_TYPES: Record<Command['type'], true> = {
   list_nodes: true,
   list_edges: true,
   list_types: true,
+  describe_type: true,
+  search_types: true,
   info: true,
   undo: true,
   redo: true,
@@ -102,7 +104,15 @@ describe('D8 coverage', () => {
       .filter((d) => d.readOnly)
       .map((d) => d.verb)
       .sort();
-    expect(readOnly).toEqual(['get_config', 'info', 'list_edges', 'list_nodes', 'list_types']);
+    expect(readOnly).toEqual([
+      'describe_type',
+      'get_config',
+      'info',
+      'list_edges',
+      'list_nodes',
+      'list_types',
+      'search_types'
+    ]);
   });
 
   it('every exposed command has a description, a schema, a builder and a summary', () => {
@@ -344,6 +354,9 @@ function context(): { ctx: CommandContext; dispatch: CommandDispatch } {
 const PAIRS: Array<{ dsl: string; verb: string; args: Record<string, unknown> }> = [
   { dsl: 'add llm_node', verb: 'add_node', args: { nodeTypeId: 'llm_node' } },
   { dsl: 'delete llm_node.1', verb: 'delete_node', args: { nodeId: 'llm_node.1' } },
+  { dsl: 'describe llm_node', verb: 'describe_type', args: { nodeTypeId: 'llm_node' } },
+  { dsl: 'search llm', verb: 'search_types', args: { query: 'llm' } },
+  { dsl: 'get llm_node.1', verb: 'get_config', args: { nodeId: 'llm_node.1' } },
   {
     dsl: 'rename llm_node.1 Summariser',
     verb: 'rename_node',
@@ -437,6 +450,8 @@ describe('describeCommand', () => {
         },
         disconnect_node: { nodeId: 'a.1' },
         info: { nodeId: 'a.1' },
+        describe_type: { nodeTypeId: 'a' },
+        search_types: { query: 'a' },
         auto_layout: {},
         view: { action: 'fit_view' }
       };

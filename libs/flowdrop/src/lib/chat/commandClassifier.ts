@@ -15,6 +15,8 @@ const READ_ONLY_COMMANDS = new Set([
   'list_nodes',
   'list_edges',
   'list_types',
+  'describe_type',
+  'search_types',
   'info',
   'get_config',
   'help'
@@ -23,7 +25,8 @@ const READ_ONLY_COMMANDS = new Set([
 /**
  * Determine whether a DSL command type is mutating (modifies workflow state).
  *
- * Read-only commands (list_nodes, list_edges, list_types, info, get_config, help)
+ * Read-only commands (list_nodes, list_edges, list_types, describe_type,
+ * search_types, info, get_config, help)
  * return false. All other commands are considered mutating and return true.
  *
  * @param commandType - The command type string (e.g., "add", "list_nodes")

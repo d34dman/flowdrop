@@ -18,11 +18,16 @@ import type {
   ListNodesResultData,
   ListEdgesResultData,
   ListTypesResultData,
+  SearchTypesResultData,
+  DescribeTypeResultData,
+  TypeSummary,
+  ConfigKeyDescription,
+  PortDescription,
   HelpResultData,
   SwapNodeResultData
 } from './types.js';
-import type { ConfigProperty, Branch, DynamicPort } from '../types/index.js';
-import type { WorkflowNode, WorkflowEdge } from '../types/index.js';
+import type { ConfigProperty, ConfigSchema, Branch, DynamicPort } from '../types/index.js';
+import type { NodeMetadata, NodePort, WorkflowNode, WorkflowEdge } from '../types/index.js';
 import { generateNodeId } from '../utils/nodeIds.js';
 import { extractConfigDefaults } from '../utils/nodeIds.js';
 import { computeAutoPosition } from './positioner.js';
@@ -82,6 +87,154 @@ export function resolveNode(shortId: string, nodes: WorkflowNode[]): WorkflowNod
 }
 
 // ============================================================================
+// Teaching errors (D7 of the browser-agent plan)
+// ============================================================================
+//
+// A failed command names the valid alternatives, because for a browser agent
+// the error text is the only channel there is: an unknown node lists the
+// nodes, an unknown type points at list_types and names near misses, an
+// unknown port lists the node's ports, an unknown config key lists the keys.
+// Lists are capped so a large workflow cannot turn one error into a dump.
+
+const MAX_LISTED = 15;
+
+function listCapped(items: string[]): string {
+  if (items.length === 0) return 'none';
+  const shown = items.slice(0, MAX_LISTED);
+  const rest = items.length - shown.length;
+  return shown.join(', ') + (rest > 0 ? `, … and ${rest} more` : '');
+}
+
+/** Near misses for an unknown id: same prefix, or one contains the other. */
+function nearMisses(needle: string, haystack: string[]): string[] {
+  const n = needle.toLowerCase();
+  const stem = n.split(/[._-]/)[0];
+  return haystack
+    .filter((h) => {
+      const l = h.toLowerCase();
+      return l.includes(n) || n.includes(l) || (stem.length >= 3 && l.startsWith(stem));
+    })
+    .slice(0, 5);
+}
+
+function nodeNotFoundMessage(nodeId: string, nodes: WorkflowNode[]): string {
+  const ids = nodes.map((n) => toShortId(n.id));
+  return nodes.length === 0
+    ? `Node not found: ${nodeId}. The workflow has no nodes yet — add_node first.`
+    : `Node not found: ${nodeId}. Nodes in this workflow: ${listCapped(ids)}.`;
+}
+
+function typeNotFoundMessage(typeId: string, context: CommandContext): string {
+  const ids = context.nodeTypes.map((m) => toShortTypeId(m.node_type_id));
+  const near = nearMisses(typeId, ids);
+  const hint =
+    near.length > 0
+      ? ` Did you mean: ${near.join(', ')}?`
+      : ' Call list_types (or search_types) for the ids this editor accepts.';
+  return `Unknown node type: ${typeId}.${hint}`;
+}
+
+/** Every port id a node exposes in one direction, static and config-driven. */
+function portIds(node: WorkflowNode, direction: 'input' | 'output'): string[] {
+  const metadata = node.data?.metadata;
+  const config = node.data?.config;
+  if (direction === 'output') {
+    return [
+      ...(metadata?.outputs ?? []).map((p) => p.id),
+      ...((config?.branches as Branch[] | undefined) ?? []).map((b) => b.name),
+      ...((config?.dynamicOutputs as DynamicPort[] | undefined) ?? []).map((p) => p.name)
+    ];
+  }
+  return [
+    ...(metadata?.inputs ?? []).map((p) => p.id),
+    ...((config?.dynamicInputs as DynamicPort[] | undefined) ?? []).map((p) => p.name)
+  ];
+}
+
+function portNotFoundMessage(
+  node: WorkflowNode,
+  portId: string,
+  direction: 'input' | 'output'
+): string {
+  const short = toShortId(node.id);
+  const wanted = portIds(node, direction);
+  const other = portIds(node, direction === 'input' ? 'output' : 'input');
+  const otherWord = direction === 'input' ? 'outputs' : 'inputs';
+  return (
+    `Port '${portId}' not found on node ${short}. ` +
+    `Its ${direction}s: ${listCapped(wanted)}; its ${otherWord}: ${listCapped(other)}.`
+  );
+}
+
+function configKeys(node: WorkflowNode): string[] {
+  const schemaKeys = Object.keys(node.data?.metadata?.configSchema?.properties ?? {});
+  const valueKeys = Object.keys((node.data?.config as Record<string, unknown> | undefined) ?? {});
+  return Array.from(new Set([...schemaKeys, ...valueKeys]));
+}
+
+// ============================================================================
+// Describing types (shared by list_types, search_types, describe_type, get_config)
+// ============================================================================
+
+function typeSummary(m: NodeMetadata): TypeSummary {
+  const row: TypeSummary = {
+    typeId: toShortTypeId(m.node_type_id),
+    name: m.name,
+    category: m.category
+  };
+  if (m.description) row.description = m.description;
+  if (m.tags && m.tags.length > 0) row.tags = m.tags;
+  return row;
+}
+
+function describePort(p: NodePort): PortDescription {
+  const out: PortDescription = { portId: p.id, name: p.name, dataType: p.dataType };
+  if (p.required) out.required = true;
+  if (p.description) out.description = p.description;
+  return out;
+}
+
+function describeConfigKey(
+  key: string,
+  property: ConfigProperty | undefined,
+  required: boolean
+): ConfigKeyDescription {
+  const out: ConfigKeyDescription = { key };
+  if (property) {
+    // Host schemas may declare `type` as a JSON Schema array; keep it as sent.
+    const type = property.type as unknown as string | string[] | undefined;
+    if (type !== undefined) out.type = type;
+    if (property.title) out.title = property.title;
+    if (property.description) out.description = property.description;
+    if (property.enum && property.enum.length > 0) out.enum = property.enum;
+    if (property.default !== undefined) out.default = property.default;
+  }
+  if (required) out.required = true;
+  return out;
+}
+
+function describeConfigSchema(schema: ConfigSchema | undefined): ConfigKeyDescription[] {
+  if (!schema?.properties) return [];
+  const required = new Set(schema.required ?? []);
+  return Object.entries(schema.properties).map(([key, property]) =>
+    describeConfigKey(key, property, required.has(key))
+  );
+}
+
+function describeType(m: NodeMetadata): DescribeTypeResultData {
+  const out: DescribeTypeResultData = {
+    ...typeSummary(m),
+    inputs: (m.inputs ?? []).map(describePort),
+    outputs: (m.outputs ?? []).map(describePort),
+    config: describeConfigSchema(m.configSchema)
+  };
+  if (m.confirmation) out.confirmation = m.confirmation;
+  if (m.can) out.can = m.can;
+  if (m.agent) out.agent = m.agent;
+  return out;
+}
+
+// ============================================================================
 // Command Handlers
 // ============================================================================
 
@@ -98,7 +251,7 @@ function executeAddNode(
   if (!metadata) {
     return {
       ok: false,
-      error: `Unknown node type: ${command.nodeTypeId}`,
+      error: typeNotFoundMessage(command.nodeTypeId, context),
       code: 'NODE_TYPE_NOT_FOUND'
     };
   }
@@ -149,7 +302,7 @@ function executeDeleteNode(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -175,7 +328,7 @@ function executeRenameNode(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -297,7 +450,7 @@ function executeSetConfig(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -308,7 +461,20 @@ function executeSetConfig(
   const metadata = node.data.metadata;
   const configSchema = metadata?.configSchema;
   const property = configSchema?.properties?.[command.key];
-  const warnings = validateConfigValue(command.key, parsedValue, property);
+  const warnings = validateConfigValue(command.key, parsedValue, property) ?? [];
+
+  // A key the schema does not declare is stored anyway — hosts keep config
+  // open — but the caller is told, with the keys that do exist, so an agent
+  // that misspelt one finds out now rather than at run time. Silent when the
+  // node has no schema at all: there is nothing to compare against.
+  const declaredKeys = Object.keys(configSchema?.properties ?? {});
+  if (!property && declaredKeys.length > 0) {
+    warnings.push({
+      type: 'unknown_key',
+      message: `Key '${command.key}' is not in the config schema of ${toShortId(node.id)}. Declared keys: ${listCapped(declaredKeys)}`,
+      knownKeys: declaredKeys
+    });
+  }
 
   // In strict mode, validation warnings become errors
   if (command.strict && warnings && warnings.length > 0) {
@@ -358,29 +524,53 @@ function executeGetConfig(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
 
-  const config = node.data.config as Record<string, unknown> | undefined;
-  if (!config || !(command.key in config)) {
+  const config = (node.data.config as Record<string, unknown> | undefined) ?? {};
+  const schema = node.data.metadata?.configSchema;
+  const shortId = toShortId(node.id);
+
+  // No key: every value, and the schema that explains them.
+  if (command.key === undefined) {
+    const resultData: GetConfigResultData = {
+      nodeId: shortId,
+      values: config,
+      schema: describeConfigSchema(schema)
+    };
+    const keys = Object.keys(config);
+    return {
+      ok: true,
+      message:
+        keys.length === 0
+          ? `${shortId} has no config values set`
+          : `${shortId} config: ${keys.map((k) => `${k} = ${JSON.stringify(config[k])}`).join(', ')}`,
+      data: resultData
+    };
+  }
+
+  const property = schema?.properties?.[command.key];
+  if (!(command.key in config) && !property) {
     return {
       ok: false,
-      error: `Config key not found: ${command.key} on ${toShortId(node.id)}`,
+      error: `Config key not found: ${command.key} on ${shortId}. Keys: ${listCapped(configKeys(node))}.`,
       code: 'CONFIG_KEY_NOT_FOUND'
     };
   }
 
+  const required = new Set(schema?.required ?? []).has(command.key);
   const resultData: GetConfigResultData = {
-    nodeId: toShortId(node.id),
+    nodeId: shortId,
     key: command.key,
-    value: config[command.key]
+    value: config[command.key],
+    ...(property ? { schema: describeConfigKey(command.key, property, required) } : {})
   };
 
   return {
     ok: true,
-    message: `${toShortId(node.id)}:${command.key} = ${JSON.stringify(config[command.key])}`,
+    message: `${shortId}:${command.key} = ${JSON.stringify(config[command.key])}`,
     data: resultData
   };
 }
@@ -398,7 +588,7 @@ function executeInfo(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -545,7 +735,7 @@ function executeConnect(
   if (!sourceNode) {
     return {
       ok: false,
-      error: `Node not found: ${command.sourceNodeId}`,
+      error: nodeNotFoundMessage(command.sourceNodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -554,7 +744,7 @@ function executeConnect(
   if (!targetNode) {
     return {
       ok: false,
-      error: `Node not found: ${command.targetNodeId}`,
+      error: nodeNotFoundMessage(command.targetNodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -567,7 +757,7 @@ function executeConnect(
   if (!sourcePortInfo) {
     return {
       ok: false,
-      error: `Port '${command.sourcePort}' not found on node ${toShortId(sourceNode.id)}`,
+      error: portNotFoundMessage(sourceNode, command.sourcePort, 'output'),
       code: 'PORT_NOT_FOUND'
     };
   }
@@ -576,7 +766,7 @@ function executeConnect(
   if (!targetPortInfo) {
     return {
       ok: false,
-      error: `Port '${command.targetPort}' not found on node ${toShortId(targetNode.id)}`,
+      error: portNotFoundMessage(targetNode, command.targetPort, 'input'),
       code: 'PORT_NOT_FOUND'
     };
   }
@@ -667,7 +857,7 @@ function executeDisconnectPorts(
   if (!sourceNode) {
     return {
       ok: false,
-      error: `Node not found: ${command.sourceNodeId}`,
+      error: nodeNotFoundMessage(command.sourceNodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -676,7 +866,7 @@ function executeDisconnectPorts(
   if (!targetNode) {
     return {
       ok: false,
-      error: `Node not found: ${command.targetNodeId}`,
+      error: nodeNotFoundMessage(command.targetNodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -690,9 +880,17 @@ function executeDisconnectPorts(
   });
 
   if (!edge) {
+    const outgoing = workflow.edges
+      .filter((e) => e.source === sourceNode.id)
+      .map(
+        (e) =>
+          `${toShortId(e.source)}:${extractPortId(e.sourceHandle) ?? '?'} → ${toShortId(e.target)}:${extractPortId(e.targetHandle) ?? '?'}`
+      );
     return {
       ok: false,
-      error: `No edge found from ${toShortId(sourceNode.id)}:${command.sourcePort} to ${toShortId(targetNode.id)}:${command.targetPort}`,
+      error:
+        `No edge found from ${toShortId(sourceNode.id)}:${command.sourcePort} to ${toShortId(targetNode.id)}:${command.targetPort}. ` +
+        `Edges leaving ${toShortId(sourceNode.id)}: ${listCapped(outgoing)}.`,
       code: 'EDGE_NOT_FOUND'
     };
   }
@@ -718,7 +916,7 @@ function executeDisconnectNode(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -788,17 +986,66 @@ function executeListEdges(context: CommandContext): CommandResult {
 }
 
 function executeListTypes(context: CommandContext): CommandResult {
-  const types = context.nodeTypes.map((m) => ({
-    typeId: toShortTypeId(m.node_type_id),
-    name: m.name,
-    category: m.category
-  }));
+  const types = context.nodeTypes.map(typeSummary);
 
   const resultData: ListTypesResultData = { types };
 
   return {
     ok: true,
     message: `${types.length} type(s) available`,
+    data: resultData
+  };
+}
+
+function executeSearchTypes(
+  command: Extract<Command, { type: 'search_types' }>,
+  context: CommandContext
+): CommandResult {
+  const query = command.query.trim().toLowerCase();
+  const matches = query
+    ? context.nodeTypes.filter((m) => {
+        const fields = [
+          toShortTypeId(m.node_type_id),
+          m.node_type_id,
+          m.name,
+          m.description ?? '',
+          ...(m.tags ?? [])
+        ];
+        return fields.some((f) => f.toLowerCase().includes(query));
+      })
+    : context.nodeTypes;
+  const types = matches.map(typeSummary);
+
+  const resultData: SearchTypesResultData = { query: command.query, types };
+
+  return {
+    ok: true,
+    message:
+      types.length === 0
+        ? `No node type matches "${command.query}" — try list_types for the full catalog`
+        : `${types.length} type(s) match "${command.query}": ${listCapped(types.map((t) => t.typeId))}`,
+    data: resultData
+  };
+}
+
+function executeDescribeType(
+  command: Extract<Command, { type: 'describe_type' }>,
+  context: CommandContext
+): CommandResult {
+  const metadata = context.typeMap.get(command.nodeTypeId);
+  if (!metadata) {
+    return {
+      ok: false,
+      error: typeNotFoundMessage(command.nodeTypeId, context),
+      code: 'NODE_TYPE_NOT_FOUND'
+    };
+  }
+
+  const resultData = describeType(metadata);
+
+  return {
+    ok: true,
+    message: `${resultData.typeId}: ${resultData.inputs.length} input(s), ${resultData.outputs.length} output(s), ${resultData.config.length} config key(s)`,
     data: resultData
   };
 }
@@ -831,8 +1078,8 @@ export const COMMAND_HELP: Array<{
   },
   {
     name: 'get',
-    syntax: 'get <nodeId>:<key>',
-    description: 'Get a config value from a node'
+    syntax: 'get <nodeId>[:<key>]',
+    description: 'Get a config value from a node, or every value plus the schema'
   },
   {
     name: 'connect',
@@ -853,6 +1100,16 @@ export const COMMAND_HELP: Array<{
     name: 'list',
     syntax: 'list nodes|edges|types',
     description: 'List workflow nodes, edges, or available types'
+  },
+  {
+    name: 'describe',
+    syntax: 'describe <type>',
+    description: 'Show the ports, config schema and defaults of a node type'
+  },
+  {
+    name: 'search',
+    syntax: 'search <text>',
+    description: 'Find node types by id, name, description or tag'
   },
   {
     name: 'info',
@@ -1012,7 +1269,7 @@ function executeConfigOpen(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -1045,7 +1302,7 @@ function executeSelectNode(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -1078,7 +1335,7 @@ function executeSwapNode(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -1087,7 +1344,7 @@ function executeSwapNode(
   if (!newMetadata) {
     return {
       ok: false,
-      error: `Unknown node type: ${command.newTypeId}`,
+      error: typeNotFoundMessage(command.newTypeId, context),
       code: 'NODE_TYPE_NOT_FOUND'
     };
   }
@@ -1162,7 +1419,7 @@ function executeMoveNode(
   if (!node) {
     return {
       ok: false,
-      error: `Node not found: ${command.nodeId}`,
+      error: nodeNotFoundMessage(command.nodeId, workflow.nodes),
       code: 'NODE_NOT_FOUND'
     };
   }
@@ -1400,6 +1657,10 @@ export function executeCommand(command: Command, context: CommandContext): Comma
       return executeListEdges(context);
     case 'list_types':
       return executeListTypes(context);
+    case 'describe_type':
+      return executeDescribeType(command, context);
+    case 'search_types':
+      return executeSearchTypes(command, context);
     case 'help':
       return executeHelp(command);
     case 'undo':

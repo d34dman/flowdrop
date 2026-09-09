@@ -4,12 +4,18 @@ import { parseCommand } from '../../../src/lib/commands/parser.js';
 
 describe('isMutatingCommand', () => {
   describe('read-only commands return false', () => {
-    it.each(['list_nodes', 'list_edges', 'list_types', 'info', 'get_config', 'help'])(
-      '%s is read-only',
-      (commandType) => {
-        expect(isMutatingCommand(commandType)).toBe(false);
-      }
-    );
+    it.each([
+      'list_nodes',
+      'list_edges',
+      'list_types',
+      'describe_type',
+      'search_types',
+      'info',
+      'get_config',
+      'help'
+    ])('%s is read-only', (commandType) => {
+      expect(isMutatingCommand(commandType)).toBe(false);
+    });
   });
 
   describe('mutating commands return true', () => {

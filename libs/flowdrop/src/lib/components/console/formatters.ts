@@ -6,6 +6,8 @@ import type {
   ListNodesResultData,
   ListEdgesResultData,
   ListTypesResultData,
+  SearchTypesResultData,
+  DescribeTypeResultData,
   InfoResultData,
   HelpResultData
 } from '../../commands/types.js';
@@ -73,6 +75,59 @@ export function formatListTypes(data: ListTypesResultData): string {
 
   const rows = data.types.map((t) => [t.typeId, t.name, t.category]);
   return formatTable(['Type ID', 'Name', 'Category'], rows);
+}
+
+/**
+ * Formats search types result: the same table as list types, or a hint.
+ */
+export function formatSearchTypes(data: SearchTypesResultData): string {
+  if (data.types.length === 0) {
+    return `No node type matches "${data.query}"`;
+  }
+  return formatListTypes({ types: data.types });
+}
+
+/**
+ * Formats describe type result: header, ports and config schema sections.
+ */
+export function formatDescribeType(data: DescribeTypeResultData): string {
+  const lines: string[] = [];
+  lines.push(`Type:        ${data.typeId}`);
+  lines.push(`Name:        ${data.name}`);
+  lines.push(`Category:    ${data.category}`);
+  if (data.description) lines.push(`Description: ${data.description}`);
+  if (data.tags && data.tags.length > 0) lines.push(`Tags:        ${data.tags.join(', ')}`);
+  if (data.confirmation) lines.push(`Confirmation: ${data.confirmation.policy}`);
+
+  lines.push('');
+  lines.push('Inputs:');
+  if (data.inputs.length === 0) lines.push('  (none)');
+  for (const p of data.inputs) {
+    lines.push(
+      `  ${p.portId} (${p.dataType})${p.required ? ' required' : ''}${p.description ? ` — ${p.description}` : ''}`
+    );
+  }
+
+  lines.push('');
+  lines.push('Outputs:');
+  if (data.outputs.length === 0) lines.push('  (none)');
+  for (const p of data.outputs) {
+    lines.push(`  ${p.portId} (${p.dataType})${p.description ? ` — ${p.description}` : ''}`);
+  }
+
+  lines.push('');
+  lines.push('Config:');
+  if (data.config.length === 0) lines.push('  (none)');
+  for (const c of data.config) {
+    const type = Array.isArray(c.type) ? c.type.join('|') : (c.type ?? 'any');
+    const parts = [`  ${c.key} (${type})`];
+    if (c.required) parts.push('required');
+    if (c.enum) parts.push(`one of ${c.enum.map((v) => JSON.stringify(v)).join(', ')}`);
+    if (c.default !== undefined) parts.push(`default ${JSON.stringify(c.default)}`);
+    lines.push(parts.join(' ') + (c.description ? ` — ${c.description}` : ''));
+  }
+
+  return lines.join('\n');
 }
 
 /**

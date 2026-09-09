@@ -341,12 +341,48 @@ describe('parseCommand', () => {
       });
     });
 
-    it('returns error for get without key', () => {
+    it('get without a key reads every value plus the schema', () => {
       const result = parseCommand('get llm_node.1');
+      expect(result).toEqual({
+        ok: true,
+        command: { type: 'get_config', nodeId: 'llm_node.1' }
+      });
+    });
+
+    it('a trailing colon with no key is still a syntax error', () => {
+      const result = parseCommand('get llm_node.1:');
       expect(result).toEqual({
         ok: false,
         error: "Invalid syntax for 'get' command",
-        input: 'get llm_node.1'
+        input: 'get llm_node.1:'
+      });
+    });
+  });
+
+  // ==========================================================================
+  // describe / search
+  // ==========================================================================
+
+  describe('describe and search', () => {
+    it('parses describe <type>', () => {
+      expect(parseCommand('describe http_request')).toEqual({
+        ok: true,
+        command: { type: 'describe_type', nodeTypeId: 'http_request' }
+      });
+    });
+
+    it('parses search <text> with spaces', () => {
+      expect(parseCommand('search html to markdown')).toEqual({
+        ok: true,
+        command: { type: 'search_types', query: 'html to markdown' }
+      });
+    });
+
+    it('describe without a type is a syntax error, not an unknown command', () => {
+      expect(parseCommand('describe')).toEqual({
+        ok: false,
+        error: "Invalid syntax for 'describe' command",
+        input: 'describe'
       });
     });
   });

@@ -826,7 +826,7 @@ describe('executeCommand — set_config validation', () => {
     expect(data.warnings).toBeUndefined();
   });
 
-  it('no validation when key is not in schema properties', () => {
+  it('a key not in the schema is stored with an unknown_key warning that lists the declared keys', () => {
     const dispatch = createMockDispatch();
     const node = makeNode();
     const workflow = createMockWorkflow([node]);
@@ -845,8 +845,29 @@ describe('executeCommand — set_config validation', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
+    // Stored anyway — hosts keep config open.
+    expect(dispatch.updateNode as ReturnType<typeof vi.fn>).toHaveBeenCalled();
     const data = result.data as import('../../../src/lib/commands/types.js').SetConfigResultData;
-    expect(data.warnings).toBeUndefined();
+    expect(data.warnings).toHaveLength(1);
+    expect(data.warnings![0].type).toBe('unknown_key');
+    expect(data.warnings![0].knownKeys).toContain('model');
+    expect(data.warnings![0].message).toContain('model');
+  });
+
+  it('strict mode refuses a key the schema does not declare', () => {
+    const dispatch = createMockDispatch();
+    const node = makeNode();
+    const context = createMockContext(createMockWorkflow([node]), nodeTypes, dispatch);
+
+    const result = executeCommand(
+      { type: 'set_config', nodeId: 'llm_node.1', key: 'custom_field', value: 'x', strict: true },
+      context
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('CONFIG_VALIDATION_ERROR');
+    expect(dispatch.updateNode as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
   it('warns on boolean type mismatch', () => {
@@ -2819,5 +2840,323 @@ describe('executeCommand — auto_layout', () => {
     // Should use batchUpdate (not individual updateNode calls) for single undo
     expect(dispatch.batchUpdate).toHaveBeenCalledTimes(1);
     expect(dispatch.updateNode).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// Teaching errors (D7) — a failure names the valid alternatives
+// ============================================================================
+
+describe('teaching errors', () => {
+  const llmMetadata = createMockMetadata('agentspec.llm_node', 'LLM Node', {
+    outputs: [{ id: 'text', name: 'Text', type: 'output', dataType: 'string' }]
+  });
+  const apiMetadata = createMockMetadata('agentspec.api_node', 'API Node', {
+    inputs: [{ id: 'body', name: 'Body', type: 'input', dataType: 'string' }]
+  });
+  const nodeTypes = [llmMetadata, apiMetadata];
+
+  it('an unknown node lists the nodes in the workflow', () => {
+    const node = createMockNode('agentspec.llm_node.1', llmMetadata);
+    const context = createMockContext(createMockWorkflow([node]), nodeTypes);
+    const result = executeCommand({ type: 'delete_node', nodeId: 'nope.9' }, context);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('NODE_NOT_FOUND');
+    expect(result.error).toContain('llm_node.1');
+  });
+
+  it('an unknown node on an empty canvas points at add_node', () => {
+    const context = createMockContext(createMockWorkflow(), nodeTypes);
+    const result = executeCommand({ type: 'info', nodeId: 'nope.9' }, context);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('add_node');
+  });
+
+  it('an unknown type names near misses', () => {
+    const context = createMockContext(createMockWorkflow(), nodeTypes);
+    const result = executeCommand({ type: 'add_node', nodeTypeId: 'llm' }, context);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('NODE_TYPE_NOT_FOUND');
+    expect(result.error).toContain('Did you mean: llm_node');
+  });
+
+  it('an unknown type with no near miss points at list_types', () => {
+    const context = createMockContext(createMockWorkflow(), nodeTypes);
+    const result = executeCommand({ type: 'add_node', nodeTypeId: 'zzz' }, context);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('list_types');
+  });
+
+  it('an unknown port lists the ports on that node, both directions', () => {
+    const a = createMockNode('agentspec.llm_node.1', llmMetadata);
+    const b = createMockNode('agentspec.api_node.1', apiMetadata);
+    const context = createMockContext(createMockWorkflow([a, b]), nodeTypes);
+    const result = executeCommand(
+      {
+        type: 'connect',
+        sourceNodeId: 'llm_node.1',
+        sourcePort: 'output',
+        targetNodeId: 'api_node.1',
+        targetPort: 'body'
+      },
+      context
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('PORT_NOT_FOUND');
+    expect(result.error).toContain("'output' not found on node llm_node.1");
+    expect(result.error).toContain('Its outputs: text');
+    expect(result.error).toContain('its inputs: none');
+  });
+
+  it('a missing edge lists the edges leaving the source node', () => {
+    const a = createMockNode('agentspec.llm_node.1', llmMetadata);
+    const b = createMockNode('agentspec.api_node.1', apiMetadata);
+    const edge = {
+      id: 'e1',
+      source: 'agentspec.llm_node.1',
+      target: 'agentspec.api_node.1',
+      sourceHandle: 'agentspec.llm_node.1-output-text',
+      targetHandle: 'agentspec.api_node.1-input-body'
+    };
+    const context = createMockContext(createMockWorkflow([a, b], [edge]), nodeTypes);
+    const result = executeCommand(
+      {
+        type: 'disconnect_ports',
+        sourceNodeId: 'llm_node.1',
+        sourcePort: 'text',
+        targetNodeId: 'api_node.1',
+        targetPort: 'nope'
+      },
+      context
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('EDGE_NOT_FOUND');
+    expect(result.error).toContain('llm_node.1:text → api_node.1:body');
+  });
+
+  it('an unknown config key lists the keys', () => {
+    const node = createMockNode('agentspec.llm_node.1', llmMetadata);
+    const context = createMockContext(createMockWorkflow([node]), nodeTypes);
+    const result = executeCommand(
+      { type: 'get_config', nodeId: 'llm_node.1', key: 'nope' },
+      context
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('CONFIG_KEY_NOT_FOUND');
+    expect(result.error).toContain('model');
+    expect(result.error).toContain('temperature');
+  });
+});
+
+// ============================================================================
+// describe_type / search_types / get_config without a key
+// ============================================================================
+
+describe('executeCommand — describe_type', () => {
+  const http = createMockMetadata('http_request', 'HTTP Request', {
+    description: 'Fetch a URL',
+    category: 'integration',
+    tags: ['http', 'fetch'],
+    inputs: [
+      { id: 'url', name: 'URL', type: 'input', dataType: 'string', required: true },
+      { id: 'trigger', name: 'Trigger', type: 'input', dataType: 'trigger' }
+    ],
+    outputs: [
+      { id: 'body', name: 'Body', type: 'output', dataType: 'string', description: 'Response body' }
+    ],
+    configSchema: {
+      type: 'object',
+      required: ['method'],
+      properties: {
+        method: {
+          type: 'string',
+          title: 'Method',
+          enum: ['GET', 'POST'],
+          default: 'GET',
+          description: 'HTTP verb'
+        },
+        requiresConfirmation: {
+          // fddo serves this reserved key as a JSON Schema type array on purpose.
+          type: ['string', 'boolean'] as unknown as 'string',
+          default: 'inherit'
+        }
+      }
+    },
+    confirmation: { policy: 'ask', source: 'policy', authorControls: ['waive', 'require'] },
+    can: { add: true },
+    agent: { usage: 'Pair with html_to_markdown to read a page.' }
+  } as Partial<NodeMetadata>);
+  const nodeTypes = [http];
+
+  it('returns ports, config schema, and the host pass-through fields', () => {
+    const context = createMockContext(createMockWorkflow(), nodeTypes);
+    const result = executeCommand({ type: 'describe_type', nodeTypeId: 'http_request' }, context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as import('../../../src/lib/commands/types.js').DescribeTypeResultData;
+    expect(data.typeId).toBe('http_request');
+    expect(data.description).toBe('Fetch a URL');
+    expect(data.tags).toEqual(['http', 'fetch']);
+    expect(data.inputs).toEqual([
+      { portId: 'url', name: 'URL', dataType: 'string', required: true },
+      { portId: 'trigger', name: 'Trigger', dataType: 'trigger' }
+    ]);
+    expect(data.outputs).toEqual([
+      { portId: 'body', name: 'Body', dataType: 'string', description: 'Response body' }
+    ]);
+    expect(data.config).toEqual([
+      {
+        key: 'method',
+        type: 'string',
+        title: 'Method',
+        description: 'HTTP verb',
+        enum: ['GET', 'POST'],
+        default: 'GET',
+        required: true
+      },
+      { key: 'requiresConfirmation', type: ['string', 'boolean'], default: 'inherit' }
+    ]);
+    expect(data.confirmation).toEqual({
+      policy: 'ask',
+      source: 'policy',
+      authorControls: ['waive', 'require']
+    });
+    expect(data.can).toEqual({ add: true });
+    expect(data.agent).toEqual({ usage: 'Pair with html_to_markdown to read a page.' });
+  });
+
+  it('omits the pass-through fields when the host does not publish them', () => {
+    const plain = createMockMetadata('agentspec.llm_node', 'LLM Node');
+    const context = createMockContext(createMockWorkflow(), [plain]);
+    const result = executeCommand({ type: 'describe_type', nodeTypeId: 'llm_node' }, context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as import('../../../src/lib/commands/types.js').DescribeTypeResultData;
+    expect(data).not.toHaveProperty('confirmation');
+    expect(data).not.toHaveProperty('can');
+    expect(data).not.toHaveProperty('agent');
+    expect(data).not.toHaveProperty('description');
+    expect(data.config.map((c) => c.key)).toEqual(['model', 'temperature']);
+  });
+
+  it('is NODE_TYPE_NOT_FOUND for an unknown type', () => {
+    const context = createMockContext(createMockWorkflow(), nodeTypes);
+    const result = executeCommand({ type: 'describe_type', nodeTypeId: 'nope' }, context);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('NODE_TYPE_NOT_FOUND');
+  });
+});
+
+describe('executeCommand — search_types', () => {
+  const http = createMockMetadata('http_request', 'HTTP Request', {
+    description: 'Fetch a URL over HTTP',
+    category: 'integration',
+    tags: ['network']
+  });
+  const md = createMockMetadata('html_to_markdown', 'HTML to Markdown', {
+    description: 'Convert HTML',
+    category: 'text'
+  });
+  const nodeTypes = [http, md];
+
+  it('matches id, name, description and tags case-insensitively', () => {
+    const context = createMockContext(createMockWorkflow(), nodeTypes);
+    const ids = (q: string) => {
+      const r = executeCommand({ type: 'search_types', query: q }, context);
+      if (!r.ok) throw new Error(r.error);
+      return (
+        r.data as import('../../../src/lib/commands/types.js').SearchTypesResultData
+      ).types.map((t) => t.typeId);
+    };
+    expect(ids('MARKDOWN')).toEqual(['html_to_markdown']);
+    expect(ids('fetch')).toEqual(['http_request']);
+    expect(ids('network')).toEqual(['http_request']);
+    expect(ids('ht')).toEqual(['http_request', 'html_to_markdown']);
+  });
+
+  it('says so when nothing matches, and points at list_types', () => {
+    const context = createMockContext(createMockWorkflow(), nodeTypes);
+    const result = executeCommand({ type: 'search_types', query: 'zzz' }, context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect((result.data as { types: unknown[] }).types).toEqual([]);
+    expect(result.message).toContain('list_types');
+  });
+});
+
+describe('executeCommand — list_types carries description and tags', () => {
+  it('adds description and tags only when present', () => {
+    const withMeta = createMockMetadata('a', 'A', { description: 'Does A', tags: ['x'] });
+    const bare = createMockMetadata('b', 'B');
+    const context = createMockContext(createMockWorkflow(), [withMeta, bare]);
+    const result = executeCommand({ type: 'list_types' }, context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as ListTypesResultData;
+    expect(data.types[0]).toEqual({
+      typeId: 'a',
+      name: 'A',
+      category: 'ai',
+      description: 'Does A',
+      tags: ['x']
+    });
+    expect(data.types[1]).toEqual({ typeId: 'b', name: 'B', category: 'ai' });
+  });
+});
+
+describe('executeCommand — get_config with the schema', () => {
+  const llmMetadata = createMockMetadata('agentspec.llm_node', 'LLM Node');
+
+  it('without a key returns every value and the schema', () => {
+    const node = createMockNode('agentspec.llm_node.1', llmMetadata);
+    const context = createMockContext(createMockWorkflow([node]), [llmMetadata]);
+    const result = executeCommand({ type: 'get_config', nodeId: 'llm_node.1' }, context);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as GetConfigResultData;
+    expect(data.values).toEqual({ model: 'gpt-4', temperature: 0.7 });
+    expect(data.schema).toEqual([
+      { key: 'model', type: 'string', default: 'gpt-4' },
+      { key: 'temperature', type: 'number', default: 0.7 }
+    ]);
+    expect(data).not.toHaveProperty('key');
+  });
+
+  it("with a key returns the value and that key's schema entry", () => {
+    const node = createMockNode('agentspec.llm_node.1', llmMetadata);
+    const context = createMockContext(createMockWorkflow([node]), [llmMetadata]);
+    const result = executeCommand(
+      { type: 'get_config', nodeId: 'llm_node.1', key: 'model' },
+      context
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as GetConfigResultData;
+    expect(data.value).toBe('gpt-4');
+    expect(data.schema).toEqual({ key: 'model', type: 'string', default: 'gpt-4' });
+  });
+
+  it('a declared key with no value yet reads as undefined, not CONFIG_KEY_NOT_FOUND', () => {
+    const node = createMockNode('agentspec.llm_node.1', llmMetadata, {
+      data: { label: 'LLM', config: {}, metadata: llmMetadata }
+    } as Partial<WorkflowNode>);
+    const context = createMockContext(createMockWorkflow([node]), [llmMetadata]);
+    const result = executeCommand(
+      { type: 'get_config', nodeId: 'llm_node.1', key: 'model' },
+      context
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as GetConfigResultData;
+    expect(data.value).toBeUndefined();
+    expect(data.schema).toEqual({ key: 'model', type: 'string', default: 'gpt-4' });
   });
 });
