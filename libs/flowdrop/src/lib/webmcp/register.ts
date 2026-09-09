@@ -379,12 +379,13 @@ export function attachWebMCP(
       envelope = await options.onSave!();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return isConflictError(err)
-        ? errorResult(
-            'CONFLICT',
-            `${message}. The workflow changed on the server since it was loaded; reload the page before saving.`
-          )
-        : errorResult('SAVE_FAILED', message);
+      if (!isConflictError(err)) return errorResult('SAVE_FAILED', message);
+      // The server's own wording usually already says to reload; add the hint
+      // only when it does not, so the agent is not told twice.
+      const hint = /reload/i.test(message)
+        ? ''
+        : ' The workflow changed on the server since it was loaded; reload the page before saving.';
+      return errorResult('CONFLICT', `${message}${hint}`);
     }
     if (envelope) return envelopeResult(envelope, 'Workflow saved');
     return text({ ok: true, message: 'Workflow saved' });

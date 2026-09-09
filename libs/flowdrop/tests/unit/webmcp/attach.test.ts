@@ -857,6 +857,23 @@ describe('attachWebMCP — can and CONFLICT', () => {
     expect(String(out.error)).toContain('reload');
   });
 
+  it('a 409 whose message already says to reload is not told twice', async () => {
+    const conflict = Object.assign(
+      new Error('The workflow changed on the server since it was loaded; reload before saving'),
+      { status: 409 }
+    );
+    const { runtime } = await setup('auto', {
+      onSave: async () => {
+        throw conflict;
+      }
+    });
+    const out = await runtime.call('flowdrop_save');
+    expect(out.code).toBe('CONFLICT');
+    expect(out.error).toBe(
+      'The workflow changed on the server since it was loaded; reload before saving'
+    );
+  });
+
   it('an envelope returned by onSave is relayed as-is', async () => {
     const { runtime } = await setup('auto', {
       onSave: async () => ({
