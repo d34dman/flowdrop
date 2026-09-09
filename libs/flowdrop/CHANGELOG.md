@@ -7,9 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A browser agent can now save.** Feedback from the first WebMCP release: the first batch of nodes an agent added vanished on reload because nothing had persisted them — `flowdrop_add_node` and friends change the in-memory workflow, but only the editor's own Save button wrote it to the server. There is now a **`flowdrop_save`** tool: registered whenever `attachWebMCP` is given an **`onSave: () => Promise<void>`**, and automatically on the `mountFlowDropApp` path, where it defaults to the mount's own Save unless the host supplies its own `onSave`. Like any change, it asks — a save cannot be undone from the editor — and its `annotations` carry the new **`consequentialHint: true`** (added to the WebMCP spec 2026-09-03: "executing the tool will result in consequential actions that are significant, real-world, or non-reversible"). Approval callbacks (`WebMCPApproval` functions) now receive a second argument, `(commands, { tool })` — additive, existing one-argument callbacks keep working; for `save` the `commands` array is empty and `request.tool === 'save'`.
+
 ### Fixed
 
 - **The WebMCP confirm dialog no longer renders in the browser's serif fallback on Drupal.** The dialog mounts on `document.body`, outside the editor, and used `font-family: inherit` — on admin themes that scope their font to a wrapper, that is Times. It now uses a new public token **`--fd-font-sans`** (a system-ui stack), with an explicit size and line-height, so it reads like the editor wherever it is mounted. Hosts can override the token at `:root`.
+- **`set_config` no longer warns "Expected type 'string,boolean' but got 'string'"** when a node config property declares several JSON Schema types; the warning now reads `Expected type 'string' or 'boolean' but got 'number'` and fires only when the value matches none of them.
 
 ## [2.6.0] - 2026-09-03
 

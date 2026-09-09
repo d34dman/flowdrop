@@ -20,7 +20,8 @@ import type {
   WorkflowNode,
   WorkflowEdge,
   Workflow,
-  NodeMetadata
+  NodeMetadata,
+  ConfigProperty
 } from '../../../src/lib/types/index.js';
 import { buildTypeMap } from '../../../src/lib/commands/types.js';
 
@@ -621,6 +622,16 @@ describe('executeCommand — set_config validation', () => {
         stream: {
           type: 'boolean',
           default: false
+        },
+        // Backend node config schemas send a JSON Schema type array here;
+        // `ConfigProperty.type` stays a single literal, so the fixture casts
+        // through `unknown` the way a real backend payload would arrive.
+        flexible: {
+          type: ['string', 'boolean'] as unknown as ConfigProperty['type'],
+          default: 'x'
+        },
+        count: {
+          type: ['integer'] as unknown as ConfigProperty['type']
         }
       }
     }
@@ -631,7 +642,7 @@ describe('executeCommand — set_config validation', () => {
     return createMockNode('agentspec.llm_node.1', enumMetadata, {
       data: {
         label: 'LLM Node',
-        config: { model: 'gpt-4', temperature: 0.7, stream: false },
+        config: { model: 'gpt-4', temperature: 0.7, stream: false, flexible: 'x', count: 1 },
         metadata: enumMetadata
       }
     });
@@ -857,6 +868,76 @@ describe('executeCommand — set_config validation', () => {
     expect(data.warnings).toBeDefined();
     expect(data.warnings![0].type).toBe('type_mismatch');
     expect(data.warnings![0].expectedType).toBe('boolean');
+  });
+
+  it('accepts a string for a property with a JSON Schema type array, no warning', () => {
+    const dispatch = createMockDispatch();
+    const node = makeNode();
+    const workflow = createMockWorkflow([node]);
+    const context = createMockContext(workflow, nodeTypes, dispatch);
+
+    const result = executeCommand(
+      { type: 'set_config', nodeId: 'llm_node.1', key: 'flexible', value: 'yes' },
+      context
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as import('../../../src/lib/commands/types.js').SetConfigResultData;
+    expect(data.warnings).toBeUndefined();
+  });
+
+  it('accepts a boolean for a property with a JSON Schema type array, no warning', () => {
+    const dispatch = createMockDispatch();
+    const node = makeNode();
+    const workflow = createMockWorkflow([node]);
+    const context = createMockContext(workflow, nodeTypes, dispatch);
+
+    const result = executeCommand(
+      { type: 'set_config', nodeId: 'llm_node.1', key: 'flexible', value: 'true' },
+      context
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as import('../../../src/lib/commands/types.js').SetConfigResultData;
+    expect(data.warnings).toBeUndefined();
+  });
+
+  it('rejects a number for a property with a JSON Schema type array, with a joined message', () => {
+    const dispatch = createMockDispatch();
+    const node = makeNode();
+    const workflow = createMockWorkflow([node]);
+    const context = createMockContext(workflow, nodeTypes, dispatch);
+
+    const result = executeCommand(
+      { type: 'set_config', nodeId: 'llm_node.1', key: 'flexible', value: '5' },
+      context
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as import('../../../src/lib/commands/types.js').SetConfigResultData;
+    expect(data.warnings).toBeDefined();
+    expect(data.warnings![0].type).toBe('type_mismatch');
+    expect(data.warnings![0].message).toBe("Expected type 'string' or 'boolean' but got 'number'");
+  });
+
+  it('accepts a number for a single-element JSON Schema type array (integer)', () => {
+    const dispatch = createMockDispatch();
+    const node = makeNode();
+    const workflow = createMockWorkflow([node]);
+    const context = createMockContext(workflow, nodeTypes, dispatch);
+
+    const result = executeCommand(
+      { type: 'set_config', nodeId: 'llm_node.1', key: 'count', value: '42' },
+      context
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const data = result.data as import('../../../src/lib/commands/types.js').SetConfigResultData;
+    expect(data.warnings).toBeUndefined();
   });
 });
 

@@ -258,17 +258,23 @@ function validateConfigValue(
   // Type validation
   if (property.type) {
     const actualType = Array.isArray(value) ? 'array' : typeof value;
-    const expectedType = property.type === 'integer' ? 'number' : property.type;
+    // Node config schemas from the backend sometimes declare `type` as a JSON
+    // Schema array (e.g. ['string', 'boolean']) rather than a single literal;
+    // `ConfigProperty.type` stays a single literal (it drives the schema
+    // form elsewhere), so normalise here instead of widening that interface.
+    const rawType = property.type as ConfigProperty['type'] | ConfigProperty['type'][];
+    const declaredTypes = Array.isArray(rawType) ? rawType : [rawType];
+    const expectedTypes: string[] = declaredTypes.map((t) => (t === 'integer' ? 'number' : t));
 
     // Only warn if there's a genuine mismatch (null/object handled specially)
     if (
       value !== null &&
-      actualType !== expectedType &&
-      !(expectedType === 'object' && actualType === 'object')
+      !expectedTypes.includes(actualType) &&
+      !(expectedTypes.includes('object') && actualType === 'object')
     ) {
       warnings.push({
         type: 'type_mismatch',
-        message: `Expected type '${property.type}' but got '${actualType}'`,
+        message: `Expected type ${expectedTypes.map((t) => `'${t}'`).join(' or ')} but got '${actualType}'`,
         expectedType: property.type,
         actualType
       });
