@@ -3,7 +3,7 @@
   "description": "A drop-in visual workflow editor for any web application. You own the backend. You own the data. You own the orchestration.",
   "license": "MIT",
   "private": false,
-  "version": "2.7.0",
+  "version": "2.8.0",
   "author": "Shibin Das (D34dMan)",
   "bugs": {
     "url": "https://github.com/flowdrop-io/flowdrop/issues"
