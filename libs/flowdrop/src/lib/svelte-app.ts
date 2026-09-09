@@ -45,10 +45,10 @@ import { logger } from './utils/logger.js';
 import { globalSaveWorkflow, globalExportWorkflow } from './services/globalSave.js';
 
 import type { NavbarAction } from './types/navbar.js';
-import type { WebMCPHandle, WebMCPMountOptions } from './webmcp/types.js';
+import type { HostHooks, WebMCPHandle, WebMCPMountOptions } from './webmcp/types.js';
 import { whenWorkflowLoaded } from './utils/whenWorkflowLoaded.svelte.js';
 export type { NavbarAction };
-export type { WebMCPHandle, WebMCPMountOptions };
+export type { HostHooks, WebMCPHandle, WebMCPMountOptions };
 
 /**
  * Mount options for FlowDrop App
@@ -200,6 +200,17 @@ export interface FlowDropMountOptions {
    * API. Default off.
    */
   webmcp?: boolean | WebMCPMountOptions;
+
+  /**
+   * The host's save/run/status hooks, published on the instance as
+   * `instance.host` for every agent surface the editor has — the AI
+   * Assistant panel's tool loop today, the WebMCP editor tools when
+   * {@link webmcp} is on. `onSave` defaults to the mount's own Save. Hooks
+   * given inside the {@link webmcp} option take precedence, so a host that
+   * already passes them there need not repeat them; pass them here when the
+   * assistant must be able to run the workflow even with WebMCP switched off.
+   */
+  host?: HostHooks;
 }
 
 /**
@@ -384,6 +395,15 @@ async function configureInstance(
   return config;
 }
 
+/** The hooks a host actually supplied — an explicit `undefined` must not shadow a default. */
+function definedHooks(hooks: HostHooks): HostHooks {
+  const out: HostHooks = {};
+  if (hooks.onSave) out.onSave = hooks.onSave;
+  if (hooks.onRun) out.onRun = hooks.onRun;
+  if (hooks.onRunStatus) out.onRunStatus = hooks.onRunStatus;
+  return out;
+}
+
 /**
  * Attach the WebMCP adapter for a `mountFlowDropApp` mount.
  *
@@ -470,7 +490,8 @@ export async function mountFlowDropApp(
     showSettingsSyncButton,
     showSettingsResetButton,
     instanceId,
-    webmcp
+    webmcp,
+    host
   } = options;
 
   // Per-instance state container — this is what allows multiple FlowDrop
@@ -746,6 +767,7 @@ export async function mountFlowDropApp(
         };
   const webmcpOptions: WebMCPMountOptions = {
     onSave: defaultOnSave,
+    ...definedHooks(host ?? {}),
     ...(webmcp === true || !webmcp ? {} : webmcp)
   };
   fd.host.set({

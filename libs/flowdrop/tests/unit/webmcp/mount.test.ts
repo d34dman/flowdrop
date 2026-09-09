@@ -144,6 +144,44 @@ describe('mountFlowDropApp({ webmcp })', () => {
     expect(app2.instance.host.current.onRun).toBe(onRun);
     expect(typeof app2.instance.host.current.onSave).toBe('function');
     app2.destroy();
+
+    // The `host` option carries them with WebMCP off; the webmcp option wins a clash.
+    const onRunStatus = vi.fn(async () => ({
+      ok: true,
+      data: { runId: 'r1', status: 'completed' }
+    }));
+    const otherRun = vi.fn(async () => ({ ok: true, data: { runId: 'r2' } }));
+    const el3 = document.createElement('div');
+    document.body.appendChild(el3);
+    const app3 = await mountFlowDropApp(el3, {
+      workflow,
+      nodes: [textIn],
+      portConfig: DEFAULT_PORT_CONFIG,
+      categories: [],
+      host: { onRun, onRunStatus },
+      features: { showToasts: false, autoSaveDraft: false },
+      instanceId: `mount-host3-${Math.random().toString(36).slice(2)}`
+    });
+    expect(app3.instance.host.current.onRun).toBe(onRun);
+    expect(app3.instance.host.current.onRunStatus).toBe(onRunStatus);
+    expect(typeof app3.instance.host.current.onSave).toBe('function');
+    app3.destroy();
+
+    const el4 = document.createElement('div');
+    document.body.appendChild(el4);
+    const app4 = await mountFlowDropApp(el4, {
+      workflow,
+      nodes: [textIn],
+      portConfig: DEFAULT_PORT_CONFIG,
+      categories: [],
+      host: { onRun, onRunStatus },
+      webmcp: { onRun: otherRun },
+      features: { showToasts: false, autoSaveDraft: false },
+      instanceId: `mount-host4-${Math.random().toString(36).slice(2)}`
+    });
+    expect(app4.instance.host.current.onRun).toBe(otherRun);
+    expect(app4.instance.host.current.onRunStatus).toBe(onRunStatus);
+    app4.destroy();
   });
 
   it("registers flowdrop_save and calling it invokes the mount's save path", async () => {
