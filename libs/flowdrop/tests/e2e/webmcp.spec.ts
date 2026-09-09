@@ -134,6 +134,29 @@ test.describe('WebMCP editor tools', () => {
     await expectNodeCount(page, 2);
   });
 
+  test('save asks, then runs the host save once', async ({ page }) => {
+    const tools = await page.evaluate(() => window.__webmcp.tools);
+    expect(tools.flowdrop_save.readOnly).toBe(false);
+
+    await startCall(page, 'flowdrop_save', {});
+    const dialog = page.getByTestId('flowdrop-webmcp-confirm');
+    await expect(dialog).toContainText('Save “WebMCP E2E” to the server');
+    await expect(dialog).toContainText('cannot be undone');
+    await expect(page.getByTestId('webmcp-test')).toHaveAttribute('data-saves', '0');
+
+    await page.getByTestId('flowdrop-webmcp-approve').click();
+    const out = await awaitResult(page);
+    expect(out.ok).toBe(true);
+    await expect(page.getByTestId('webmcp-test')).toHaveAttribute('data-saves', '1');
+
+    // A rejected save does not touch the host.
+    await startCall(page, 'flowdrop_save', {});
+    await page.getByTestId('flowdrop-webmcp-reject').click();
+    const rejected = await awaitResult(page);
+    expect(rejected.code).toBe('REJECTED');
+    await expect(page.getByTestId('webmcp-test')).toHaveAttribute('data-saves', '1');
+  });
+
   test('rejecting leaves the workflow untouched', async ({ page }) => {
     await startCall(page, 'flowdrop_delete_node', { nodeId: 'text_output.1' });
     await page.getByTestId('flowdrop-webmcp-reject').click();

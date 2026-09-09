@@ -9,6 +9,15 @@ import { mountFlowDropApp } from '../../../src/lib/svelte-app.js';
 import { createFakeModelContext } from '../../../src/lib/webmcp/fake.js';
 import type { NodeMetadata, Workflow } from '../../../src/lib/types/index.js';
 import { DEFAULT_PORT_CONFIG } from '../../../src/lib/config/defaultPortConfig.js';
+import * as globalSaveModule from '../../../src/lib/services/globalSave.js';
+
+// The mount path's default `onSave` is `mountedApp.save()`, which delegates
+// to globalSaveWorkflow(). Mock it here rather than exercise the real API
+// client — the seam this suite already uses for fetch.
+vi.mock('../../../src/lib/services/globalSave.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/lib/services/globalSave.js')>();
+  return { ...actual, globalSaveWorkflow: vi.fn(async () => {}) };
+});
 
 const textIn = {
   node_type_id: 'text_input',
@@ -92,5 +101,35 @@ describe('mountFlowDropApp({ webmcp })', () => {
     app.destroy();
     expect(app.webmcp?.attached).toBe(false);
     expect(runtime.tools.size).toBe(0);
+  });
+
+  it("registers flowdrop_save and calling it invokes the mount's save path", async () => {
+    const runtime = createFakeModelContext();
+    Object.defineProperty(document, 'modelContext', { value: runtime, configurable: true });
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network'));
+    vi.spyOn(window, 'fetch').mockRejectedValue(new Error('no network'));
+    vi.mocked(globalSaveModule.globalSaveWorkflow).mockClear();
+
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = await mountFlowDropApp(el, {
+      workflow,
+      nodes: [textIn],
+      portConfig: DEFAULT_PORT_CONFIG,
+      categories: [],
+      webmcp: { approval: 'auto' },
+      features: { showToasts: false, autoSaveDraft: false },
+      instanceId: `mount-save-${Math.random().toString(36).slice(2)}`
+    });
+
+    await untilAttached(app);
+    await app.webmcp!.ready;
+
+    expect(runtime.tools.has('flowdrop_save')).toBe(true);
+    const out = await runtime.call('flowdrop_save');
+    expect(out.ok).toBe(true);
+    expect(globalSaveModule.globalSaveWorkflow).toHaveBeenCalledTimes(1);
+
+    app.destroy();
   });
 });

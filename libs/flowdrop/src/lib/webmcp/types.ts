@@ -98,7 +98,15 @@ export interface RegisteredToolDefinition {
   name: string;
   description: string;
   inputSchema: ToolInputSchema;
-  annotations?: { readOnlyHint?: boolean; untrustedContentHint?: boolean };
+  annotations?: {
+    readOnlyHint?: boolean;
+    untrustedContentHint?: boolean;
+    /**
+     * Spec added 2026-09-03: "executing the tool will result in consequential
+     * actions that are significant, real-world, or non-reversible."
+     */
+    consequentialHint?: boolean;
+  };
   execute(input: unknown, options?: ToolExecuteOptions): Promise<ToolResult>;
 }
 
@@ -123,15 +131,27 @@ export interface ModelContextLike {
 // Options and handle
 // ============================================================================
 
+/** Context passed to a custom {@link WebMCPApproval} callback alongside the commands. */
+export interface WebMCPApprovalRequest {
+  /** The tool being called, without prefix: `add_node`, `batch`, `save`, … */
+  tool: string;
+}
+
 /**
  * Approval policy for mutating tools.
  *
  * - `'confirm'` (default): a confirm dialog rendered inside the page.
  * - `'auto'`: run without asking. Only for hosts that already trust every
  *   agent on the page (kiosks, tests).
- * - A callback receiving the commands about to run; resolve `true` to run.
+ * - A callback receiving the commands about to run and the request they came
+ *   from; resolve `true` to run. For `save`, `commands` is empty and
+ *   `request.tool === 'save'` — there is no command to describe, only the
+ *   act of persisting.
  */
-export type WebMCPApproval = 'confirm' | 'auto' | ((commands: Command[]) => Promise<boolean>);
+export type WebMCPApproval =
+  | 'confirm'
+  | 'auto'
+  | ((commands: Command[], request: WebMCPApprovalRequest) => Promise<boolean>);
 
 export interface WebMCPOptions {
   /**
@@ -151,6 +171,13 @@ export interface WebMCPOptions {
    * it could do.
    */
   onUIAction?: (action: UIAction) => void;
+  /**
+   * Persist the workflow (the editor's Save). When supplied, a `save` tool
+   * is registered; it is gated like a change because a save cannot be
+   * undone from the editor. When omitted the tool is not registered —
+   * there is nothing it could do.
+   */
+  onSave?: () => Promise<void>;
   /** Where the built-in confirm dialog mounts. Default `document.body`. */
   container?: HTMLElement;
   /**

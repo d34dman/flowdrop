@@ -213,7 +213,7 @@ export function attachWebMCP(
     if (needsApproval(commands)) {
       let approved: boolean;
       try {
-        approved = await gate.request(commands);
+        approved = await gate.request(commands, { tool: descriptor.verb });
       } catch (err) {
         if (err instanceof GateBusyError) return errorResult('BUSY', err.message);
         throw err;
@@ -244,34 +244,99 @@ export function attachWebMCP(
     );
   }
 
+  // ---- save -----------------------------------------------------------
+
+  const SAVE_INPUT_SCHEMA = {
+    type: 'object',
+    properties: {},
+    additionalProperties: false
+  } as const;
+
+  /**
+   * `save` persists the workflow via the host's `onSave`. It has no commands
+   * of its own — nothing for `executeBatch` to run — so it is gated directly
+   * rather than going through `run()`'s command pipeline.
+   */
+  async function runSave(input: unknown): Promise<ToolResult> {
+    if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
+
+    try {
+      validateToolArgs(SAVE_INPUT_SCHEMA, input);
+    } catch (err) {
+      if (err instanceof ToolArgumentError) return errorResult('INVALID_ARGUMENTS', err.message);
+      throw err;
+    }
+
+    if (!instance.workflow.current) {
+      return errorResult('NO_WORKFLOW', 'No workflow is loaded in this editor');
+    }
+
+    let approved: boolean;
+    try {
+      approved = await gate.request([], { tool: 'save' });
+    } catch (err) {
+      if (err instanceof GateBusyError) return errorResult('BUSY', err.message);
+      throw err;
+    }
+    if (!approved) return errorResult('REJECTED', 'The user rejected the change');
+    if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
+
+    try {
+      // Non-null: runSave is only wired up as a tool when options.onSave is set.
+      await options.onSave!();
+    } catch (err) {
+      return errorResult('SAVE_FAILED', err instanceof Error ? err.message : String(err));
+    }
+    return text({ ok: true, message: 'Workflow saved' });
+  }
+
   // ---- register -----------------------------------------------------------
 
   const nameSuffix = ` Editor: "${editorName()}".`;
 
-  async function register(descriptor: ToolDescriptor): Promise<void> {
-    const name = `${prefix}_${descriptor.verb}`;
-    const tool: RegisteredToolDefinition = {
-      name,
-      description: descriptor.description + nameSuffix,
-      inputSchema: descriptor.inputSchema,
-      annotations: { readOnlyHint: descriptor.readOnly },
-      execute: (input) => run(descriptor, input)
-    };
+  async function registerRaw(tool: RegisteredToolDefinition): Promise<void> {
     try {
       // The spec returns a promise that rejects when the runtime refuses the
       // tool; pre-spec runtimes return nothing, which `await` takes as accepted.
       await runtime.registerTool(tool, { signal: controller.signal });
     } catch (err) {
       logger.warn(
-        `WebMCP: the runtime refused tool "${name}":`,
+        `WebMCP: the runtime refused tool "${tool.name}":`,
         err instanceof Error ? err.message : err
       );
       return;
     }
-    if (attached) names.push(name);
+    if (attached) names.push(tool.name);
   }
 
-  const ready = Promise.all(descriptors.map(register)).then(() => undefined);
+  function register(descriptor: ToolDescriptor): Promise<void> {
+    return registerRaw({
+      name: `${prefix}_${descriptor.verb}`,
+      description: descriptor.description + nameSuffix,
+      inputSchema: descriptor.inputSchema,
+      annotations: { readOnlyHint: descriptor.readOnly },
+      execute: (input) => run(descriptor, input)
+    });
+  }
+
+  const toolRegistrations = descriptors.map(register);
+  if (options.onSave) {
+    toolRegistrations.push(
+      registerRaw({
+        name: `${prefix}_save`,
+        description:
+          'Save the workflow to the server. Nothing an agent changes is persisted until ' +
+          'this runs or the person clicks Save. Asks for approval; cannot be undone from ' +
+          'the editor.' +
+          nameSuffix,
+        inputSchema: SAVE_INPUT_SCHEMA,
+        annotations: { readOnlyHint: false, consequentialHint: true },
+        execute: (input) => runSave(input)
+      })
+    );
+  }
+
+  const ready = Promise.all(toolRegistrations).then(() => undefined);
 
   // ---- detach -------------------------------------------------------------
 

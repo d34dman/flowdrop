@@ -617,16 +617,10 @@ export async function mountFlowDropApp(
     unsubscribeDraftSettings
   };
 
-  // WebMCP editor tools, opt-in. Attaches in the background — mounting does
-  // not wait for it — and detaches with the mount.
+  // WebMCP editor tools, opt-in. Attached below, once `mountedApp` exists —
+  // its default `onSave` is `mountedApp.save()`.
   let webmcpHandle: WebMCPHandle | undefined;
   let destroyed = false;
-  if (webmcp) {
-    void attachWebMCPToMount(fd, webmcp === true ? {} : webmcp, () => destroyed).then((handle) => {
-      if (destroyed) handle?.detach();
-      else webmcpHandle = handle;
-    });
-  }
 
   // Create the mounted app interface
   const mountedApp: MountedFlowDropApp = {
@@ -730,6 +724,21 @@ export async function mountFlowDropApp(
       return removed;
     }
   };
+
+  // WebMCP editor tools, opt-in. Attaches in the background — mounting does
+  // not wait for it — and detaches with the mount. Defaults `onSave` to the
+  // mount's own Save so a browser agent's `save` tool persists exactly like
+  // clicking Save does; a host that supplies its own `onSave` overrides it.
+  if (webmcp) {
+    const webmcpOptions: WebMCPMountOptions = {
+      onSave: () => mountedApp.save(),
+      ...(webmcp === true ? {} : webmcp)
+    };
+    void attachWebMCPToMount(fd, webmcpOptions, () => destroyed).then((handle) => {
+      if (destroyed) handle?.detach();
+      else webmcpHandle = handle;
+    });
+  }
 
   return mountedApp;
 }

@@ -15,9 +15,21 @@ import { mount, unmount } from 'svelte';
 import type { Command } from '../commands/types.js';
 import { defaultMessages, mergeMessages, messagesContext } from '../messages/index.js';
 import type { Messages, MessagesOverride } from '../messages/index.js';
-import type { WebMCPApproval } from './types.js';
+import type { WebMCPApproval, WebMCPApprovalRequest } from './types.js';
 import { describeCommand } from './descriptors.js';
 import WebMCPConfirm from './WebMCPConfirm.svelte';
+
+/** What the gate needs to know about the call it is asking approval for. */
+export interface GateRequest extends WebMCPApprovalRequest {
+  /**
+   * Dialog lines, one per command. Defaults to `commands.map(describeCommand)`;
+   * `save` has no commands to describe, so the gate fills in the save line
+   * itself when this is omitted and `tool === 'save'`.
+   */
+  lines?: string[];
+  /** Extra sentence shown under the title, e.g. "This cannot be undone." */
+  hint?: string;
+}
 
 export interface ApprovalGate {
   /**
@@ -25,7 +37,7 @@ export interface ApprovalGate {
    * {@link GateBusyError} when a decision is already pending — the caller
    * turns that into a `busy` tool error instead of stacking dialogs.
    */
-  request(commands: Command[]): Promise<boolean>;
+  request(commands: Command[], request: GateRequest): Promise<boolean>;
   /** True while a decision is pending. */
   readonly busy: boolean;
   /** Dismiss any open dialog (as a rejection) and release resources. */
@@ -64,13 +76,28 @@ export function createApprovalGate(
     return mergeMessages(defaultMessages, typeof override === 'function' ? override() : override);
   };
 
-  async function decide(commands: Command[]): Promise<boolean> {
+  async function decide(commands: Command[], request: GateRequest): Promise<boolean> {
     if (approval === 'auto') return true;
-    if (typeof approval === 'function') return approval(commands);
-    return confirmInPage(commands);
+    if (typeof approval === 'function') return approval(commands, { tool: request.tool });
+    return confirmInPage(commands, request);
   }
 
-  function confirmInPage(commands: Command[]): Promise<boolean> {
+  // `lines`/`hint` default from the commands for an ordinary change; `save`
+  // has no commands, so it gets its own dialog copy from the messages system.
+  function resolveLines(commands: Command[], request: GateRequest): string[] {
+    if (request.lines) return request.lines;
+    if (request.tool === 'save') {
+      return [messages().webmcp.saveLine({ name: options.editorName() })];
+    }
+    return commands.map(describeCommand);
+  }
+
+  function resolveHint(request: GateRequest): string | undefined {
+    if (request.hint !== undefined) return request.hint;
+    return request.tool === 'save' ? messages().webmcp.saveHint : undefined;
+  }
+
+  function confirmInPage(commands: Command[], request: GateRequest): Promise<boolean> {
     const target = options.container ?? (typeof document !== 'undefined' ? document.body : null);
     if (!target) {
       // No DOM to ask in: refuse rather than silently apply.
@@ -96,7 +123,8 @@ export function createApprovalGate(
         context: messagesContext(messages),
         props: {
           editorName: options.editorName(),
-          lines: commands.map(describeCommand),
+          lines: resolveLines(commands, request),
+          hint: resolveHint(request),
           onResolve: finish
         }
       });
@@ -109,11 +137,11 @@ export function createApprovalGate(
     get busy() {
       return pending;
     },
-    async request(commands) {
+    async request(commands, request) {
       if (pending) throw new GateBusyError();
       pending = true;
       try {
-        return await decide(commands);
+        return await decide(commands, request);
       } finally {
         pending = false;
       }

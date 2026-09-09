@@ -517,3 +517,107 @@ describe('attachWebMCP — confirm dialog', () => {
     expect(dialog()).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// save
+// ---------------------------------------------------------------------------
+
+describe('attachWebMCP — save', () => {
+  const dialog = () => document.querySelector('[data-testid="flowdrop-webmcp-confirm"]');
+  const click = (testid: string) =>
+    (document.querySelector(`[data-testid="${testid}"]`) as HTMLButtonElement).click();
+
+  it('is not registered without onSave', async () => {
+    const { handle } = await setup('auto');
+    expect(handle.tools).not.toContain('flowdrop_save');
+  });
+
+  it('is registered when onSave is given', async () => {
+    const onSave = vi.fn(async () => {});
+    const { handle } = await setup('auto', { onSave });
+    expect(handle.tools).toContain('flowdrop_save');
+  });
+
+  it('under approval: confirm, shows the save line; Reject rejects and onSave is not called', async () => {
+    const onSave = vi.fn(async () => {});
+    const { runtime } = await setup('confirm', { onSave });
+    const pending = runtime.call('flowdrop_save');
+    await tick();
+
+    expect(dialog()).not.toBeNull();
+    expect(dialog()?.textContent).toContain('Save “Newsletter” to the server');
+
+    click('flowdrop-webmcp-reject');
+    const out = await pending;
+    expect(out.code).toBe('REJECTED');
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('under approval: confirm, Apply calls onSave once and reports ok', async () => {
+    const onSave = vi.fn(async () => {});
+    const { runtime } = await setup('confirm', { onSave });
+    const pending = runtime.call('flowdrop_save');
+    await tick();
+
+    click('flowdrop-webmcp-approve');
+    const out = await pending;
+    expect(out.ok).toBe(true);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('approval: auto calls onSave without showing a dialog', async () => {
+    const onSave = vi.fn(async () => {});
+    const { runtime } = await setup('auto', { onSave });
+    const out = await runtime.call('flowdrop_save');
+    expect(out.ok).toBe(true);
+    expect(dialog()).toBeNull();
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('a custom approval function receives ([], { tool: "save" })', async () => {
+    const onSave = vi.fn(async () => {});
+    const approval = vi.fn(async () => true);
+    const { runtime } = await setup(approval, { onSave });
+    await runtime.call('flowdrop_save');
+    expect(approval).toHaveBeenCalledWith([], { tool: 'save' });
+  });
+
+  it('a custom approval function for a normal change receives (commands, { tool: "add_node" })', async () => {
+    const approval = vi.fn(async () => true);
+    const { runtime } = await setup(approval);
+    await runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
+    expect(approval).toHaveBeenCalledWith([{ type: 'add_node', nodeTypeId: 'text_input' }], {
+      tool: 'add_node'
+    });
+  });
+
+  it('onSave rejecting reports SAVE_FAILED', async () => {
+    const onSave = vi.fn(async () => {
+      throw new Error('network down');
+    });
+    const { runtime } = await setup('auto', { onSave });
+    const out = await runtime.call('flowdrop_save');
+    expect(out.ok).toBe(false);
+    expect(out.code).toBe('SAVE_FAILED');
+    expect(out.error).toContain('network down');
+  });
+
+  it('a second mutating call while the save dialog is open gets BUSY', async () => {
+    const onSave = vi.fn(async () => {});
+    const { runtime } = await setup('confirm', { onSave });
+    const first = runtime.call('flowdrop_save');
+    await tick();
+    const second = await runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
+    expect(second.code).toBe('BUSY');
+    click('flowdrop-webmcp-approve');
+    expect((await first).ok).toBe(true);
+  });
+
+  it('rejects unknown arguments', async () => {
+    const onSave = vi.fn(async () => {});
+    const { runtime } = await setup('auto', { onSave });
+    const out = await runtime.call('flowdrop_save', { extra: true });
+    expect(out.code).toBe('INVALID_ARGUMENTS');
+    expect(onSave).not.toHaveBeenCalled();
+  });
+});

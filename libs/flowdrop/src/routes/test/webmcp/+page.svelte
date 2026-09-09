@@ -85,14 +85,22 @@
   fd.workflow.initialize(workflow);
 
   let attached = $state<'pending' | 'attached' | 'no-runtime'>('pending');
+  // The page has no server; `save` counts calls so the spec can see the
+  // gate → onSave chain end to end.
+  let saves = $state(0);
 
   onMount(() => {
-    const handle = attachWebMCP(fd, { nodeTypes });
+    const handle = attachWebMCP(fd, {
+      nodeTypes,
+      onSave: async () => {
+        saves += 1;
+      }
+    });
     attached = handle ? 'attached' : 'no-runtime';
     return () => handle?.detach();
   });
 </script>
 
-<div data-testid="webmcp-test" data-webmcp={attached} style="height: 100vh;">
+<div data-testid="webmcp-test" data-webmcp={attached} data-saves={saves} style="height: 100vh;">
   <App instance={fd} nodes={nodeTypes} {workflow} height="100%" />
 </div>

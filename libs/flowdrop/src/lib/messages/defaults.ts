@@ -554,6 +554,8 @@ export const defaultMessages = {
     confirmCount: ({ count }: { count: number }) =>
       `${count === 1 ? '1 change' : `${count} changes`} — applied together, undone together.`,
     reject: 'Reject',
-    apply: 'Apply'
+    apply: 'Apply',
+    saveLine: ({ name }: { name: string }) => `Save “${name}” to the server`,
+    saveHint: 'Writes the workflow to the server. This cannot be undone from the editor.'
   }
 } as const;

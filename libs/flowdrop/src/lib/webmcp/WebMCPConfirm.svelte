@@ -17,11 +17,16 @@
     editorName: string;
     /** One human-readable line per command (see `describeCommand`). */
     lines: string[];
+    /**
+     * Overrides the default "N changes — applied together, undone together"
+     * hint, e.g. for `save`, which has no commands to count.
+     */
+    hint?: string;
     /** Called exactly once with the decision. */
     onResolve: (approved: boolean) => void;
   }
 
-  let { editorName, lines, onResolve }: Props = $props();
+  let { editorName, lines, hint, onResolve }: Props = $props();
 
   let rejectButton = $state<HTMLButtonElement | null>(null);
   let approveButton = $state<HTMLButtonElement | null>(null);
@@ -54,7 +59,7 @@
       {m().webmcp.confirmTitle({ name: editorName })}
     </h2>
     <p class="fd-webmcp-confirm__hint">
-      {m().webmcp.confirmCount({ count: lines.length })}
+      {hint ?? m().webmcp.confirmCount({ count: lines.length })}
     </p>
     <ol id="fd-webmcp-confirm-list" class="fd-webmcp-confirm__list">
       {#each lines as line, i (i)}
