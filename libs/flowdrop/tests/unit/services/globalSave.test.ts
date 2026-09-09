@@ -31,7 +31,8 @@ const {
   mockClientSave,
   mockClientUpdate,
   mockApiIsConfigured,
-  mockApiConfigure
+  mockApiConfigure,
+  mockStoreAcknowledgeServer
 } = vi.hoisted(() => ({
   mockGetWorkflowStore: vi.fn(),
   mockWorkflowActionsBatchUpdate: vi.fn(),
@@ -39,7 +40,8 @@ const {
   mockClientSave: vi.fn(),
   mockClientUpdate: vi.fn(),
   mockApiIsConfigured: vi.fn(),
-  mockApiConfigure: vi.fn()
+  mockApiConfigure: vi.fn(),
+  mockStoreAcknowledgeServer: vi.fn()
 }));
 
 // globalSave resolves its target via getDefaultInstance(). Mock the instance
@@ -53,7 +55,8 @@ vi.mock('$lib/stores/instanceContainer.svelte.js', () => ({
         return mockGetWorkflowStore();
       },
       batchUpdate: (...args: unknown[]) => mockWorkflowActionsBatchUpdate(...args),
-      markAsSaved: (...args: unknown[]) => mockStoreMarkAsSaved(...args)
+      markAsSaved: (...args: unknown[]) => mockStoreMarkAsSaved(...args),
+      acknowledgeServer: (...args: unknown[]) => mockStoreAcknowledgeServer(...args)
     },
     api: {
       isConfigured: (...args: unknown[]) => mockApiIsConfigured(...args),
@@ -314,6 +317,39 @@ describe('globalSaveWorkflow', () => {
   // interface round-trip (the payload is an explicit key list — a contract
   // field missing from it is silently stripped on every save)
   // -------------------------------------------------------------------------
+
+  describe('revision round trip', () => {
+    it('sends the loaded revision on update and takes the new one from the response', async () => {
+      mockGetWorkflowStore.mockReturnValue({ ...storeWorkflow('wf-1'), revision: '100' });
+      mockClientUpdate.mockResolvedValue({
+        ...backendWorkflow('wf-1'),
+        revision: '101',
+        can: { save: true, run: false }
+      });
+
+      await globalSaveWorkflow();
+
+      expect(mockClientUpdate).toHaveBeenCalledWith(
+        'wf-1',
+        expect.objectContaining({ revision: '100' })
+      );
+      expect(mockStoreAcknowledgeServer).toHaveBeenCalledWith({
+        revision: '101',
+        can: { save: true, run: false }
+      });
+    });
+
+    it('omits revision when the workflow carries none', async () => {
+      mockGetWorkflowStore.mockReturnValue(storeWorkflow('wf-1'));
+      mockClientUpdate.mockResolvedValue(backendWorkflow('wf-1'));
+
+      await globalSaveWorkflow();
+
+      const sent = mockClientUpdate.mock.calls[0][1] as Record<string, unknown>;
+      expect(sent).not.toHaveProperty('revision');
+      expect(sent).not.toHaveProperty('can');
+    });
+  });
 
   describe('workflow interface serialization', () => {
     const iface = {

@@ -23,9 +23,12 @@ import { validateToolArgs } from './validate.js';
 import { createApprovalGate, GateBusyError } from './gate.js';
 import {
   ToolArgumentError,
+  type HostEnvelope,
   type ModelContextLike,
   type RegisteredToolDefinition,
+  type RunStatus,
   type ToolDescriptor,
+  type ToolInputSchema,
   type ToolResult,
   type WebMCPHandle,
   type WebMCPOptions
@@ -96,8 +99,45 @@ function text(payload: unknown, isError = false): ToolResult {
   };
 }
 
-function errorResult(code: string, message: string): ToolResult {
-  return text({ ok: false, code, error: message }, true);
+function errorResult(
+  code: string,
+  message: string,
+  extra: Record<string, unknown> = {}
+): ToolResult {
+  return text({ ok: false, code, error: message, ...extra }, true);
+}
+
+/**
+ * A host envelope as a tool result. `ok: false` is an error result with the
+ * host's code; `ok: true` keeps `code` (e.g. `PENDING`) and passes `data` and
+ * `can` through untouched — the agent reads them, the adapter never does.
+ */
+function envelopeResult(envelope: HostEnvelope, fallbackMessage: string): ToolResult {
+  const message = envelope.message ?? fallbackMessage;
+  if (!envelope.ok) {
+    return errorResult(envelope.code ?? 'FAILED', message, {
+      ...(envelope.data !== undefined ? { data: envelope.data } : {}),
+      ...(envelope.can ? { can: envelope.can } : {})
+    });
+  }
+  return text({
+    ok: true,
+    ...(envelope.code ? { code: envelope.code } : {}),
+    message,
+    ...(envelope.data !== undefined ? { data: envelope.data } : {}),
+    ...(envelope.can ? { can: envelope.can } : {})
+  });
+}
+
+/**
+ * Whether a thrown save error is the server saying the copy moved on. The
+ * library's `ApiError` carries the parsed body as `errorData` (fddo publishes
+ * `error_code: 'CONFLICT'` with a 409); a bare 409 counts too.
+ */
+function isConflictError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { status?: unknown; errorData?: { error_code?: unknown } };
+  return e.errorData?.error_code === 'CONFLICT' || e.status === 409;
 }
 
 function stripResult(result: CommandResult): Record<string, unknown> {
@@ -163,7 +203,8 @@ export function attachWebMCP(
   const gate = createApprovalGate(options.approval ?? 'confirm', {
     container: options.container,
     editorName,
-    messages: options.messages
+    messages: options.messages,
+    rememberEdits: options.rememberEdits
   });
 
   const controller = new AbortController();
@@ -244,13 +285,73 @@ export function attachWebMCP(
     );
   }
 
-  // ---- save -----------------------------------------------------------
+  // ---- host tools: save, run, run_status --------------------------------
 
-  const SAVE_INPUT_SCHEMA = {
+  const EMPTY_SCHEMA: ToolInputSchema = {
     type: 'object',
     properties: {},
     additionalProperties: false
-  } as const;
+  };
+
+  const RUN_SCHEMA: ToolInputSchema = {
+    type: 'object',
+    properties: {
+      inputs: {
+        type: 'object',
+        description:
+          "Values for the workflow's interface input ports, keyed by port name. Omit for a workflow with no inputs."
+      }
+    },
+    additionalProperties: false
+  };
+
+  const RUN_STATUS_SCHEMA: ToolInputSchema = {
+    type: 'object',
+    properties: {
+      runId: { type: 'string', description: 'The `runId` returned by run.' }
+    },
+    required: ['runId'],
+    additionalProperties: false
+  };
+
+  /**
+   * The host's word on what the user may do with the workflow, when the
+   * payload it loaded carried one. `undefined` means the host said nothing —
+   * proceed and let the server decide (D3: the server is the authority; the
+   * client only pre-empts).
+   */
+  function workflowCan(key: string): boolean | undefined {
+    return instance.workflow.current?.can?.[key];
+  }
+
+  function validateOrError(
+    schema: ToolInputSchema,
+    input: unknown
+  ): Record<string, unknown> | ToolResult {
+    try {
+      return validateToolArgs(schema, input);
+    } catch (err) {
+      if (err instanceof ToolArgumentError) return errorResult('INVALID_ARGUMENTS', err.message);
+      throw err;
+    }
+  }
+
+  const isToolResult = (v: unknown): v is ToolResult =>
+    typeof v === 'object' && v !== null && 'content' in (v as Record<string, unknown>);
+
+  /** The gate, for a host tool with no commands of its own. */
+  async function askHostGate(tool: 'save' | 'run'): Promise<ToolResult | null> {
+    let approved: boolean;
+    try {
+      approved = await gate.request([], { tool });
+    } catch (err) {
+      if (err instanceof GateBusyError) return errorResult('BUSY', err.message);
+      throw err;
+    }
+    if (!approved) return errorResult('REJECTED', 'The user rejected the change');
+    if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
+    return null;
+  }
 
   /**
    * `save` persists the workflow via the host's `onSave`. It has no commands
@@ -259,35 +360,100 @@ export function attachWebMCP(
    */
   async function runSave(input: unknown): Promise<ToolResult> {
     if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
-
-    try {
-      validateToolArgs(SAVE_INPUT_SCHEMA, input);
-    } catch (err) {
-      if (err instanceof ToolArgumentError) return errorResult('INVALID_ARGUMENTS', err.message);
-      throw err;
-    }
+    const args = validateOrError(EMPTY_SCHEMA, input);
+    if (isToolResult(args)) return args;
 
     if (!instance.workflow.current) {
       return errorResult('NO_WORKFLOW', 'No workflow is loaded in this editor');
     }
-
-    let approved: boolean;
-    try {
-      approved = await gate.request([], { tool: 'save' });
-    } catch (err) {
-      if (err instanceof GateBusyError) return errorResult('BUSY', err.message);
-      throw err;
+    if (workflowCan('save') === false) {
+      return errorResult('FORBIDDEN', 'Saving this workflow is not permitted');
     }
-    if (!approved) return errorResult('REJECTED', 'The user rejected the change');
-    if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
 
+    const refused = await askHostGate('save');
+    if (refused) return refused;
+
+    let envelope: void | HostEnvelope;
     try {
       // Non-null: runSave is only wired up as a tool when options.onSave is set.
-      await options.onSave!();
+      envelope = await options.onSave!();
     } catch (err) {
-      return errorResult('SAVE_FAILED', err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      return isConflictError(err)
+        ? errorResult(
+            'CONFLICT',
+            `${message}. The workflow changed on the server since it was loaded; reload the page before saving.`
+          )
+        : errorResult('SAVE_FAILED', message);
     }
+    if (envelope) return envelopeResult(envelope, 'Workflow saved');
     return text({ ok: true, message: 'Workflow saved' });
+  }
+
+  /** `run` starts a run through the host's `onRun`; gated like `save`. */
+  async function runRun(input: unknown): Promise<ToolResult> {
+    if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
+    const args = validateOrError(RUN_SCHEMA, input);
+    if (isToolResult(args)) return args;
+
+    if (!instance.workflow.current) {
+      return errorResult('NO_WORKFLOW', 'No workflow is loaded in this editor');
+    }
+    if (workflowCan('run') === false) {
+      return errorResult('FORBIDDEN', 'Running this workflow is not permitted');
+    }
+
+    const refused = await askHostGate('run');
+    if (refused) return refused;
+
+    let envelope: HostEnvelope;
+    try {
+      envelope = await options.onRun!((args.inputs as Record<string, unknown> | undefined) ?? {});
+    } catch (err) {
+      return errorResult('RUN_FAILED', err instanceof Error ? err.message : String(err));
+    }
+    return envelopeResult(envelope, 'Run started');
+  }
+
+  /**
+   * `run_status` is a read: never gated. A paused run comes back `ok` with
+   * `code: 'PENDING'` and the pause's node and message — a person must act in
+   * the UI; no tool answers an interrupt (D8).
+   */
+  async function runRunStatus(input: unknown): Promise<ToolResult> {
+    if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
+    const args = validateOrError(RUN_STATUS_SCHEMA, input);
+    if (isToolResult(args)) return args;
+
+    let envelope: HostEnvelope<RunStatus>;
+    try {
+      envelope = await options.onRunStatus!(args.runId as string);
+    } catch (err) {
+      return errorResult('STATUS_FAILED', err instanceof Error ? err.message : String(err));
+    }
+    if (envelope.ok && envelope.data?.status === 'paused' && !envelope.code) {
+      const p = envelope.data.pending;
+      const where = p?.nodeId ? ` at node ${p.nodeId}` : '';
+      const why = p?.message
+        ? `: ${p.message}`
+        : envelope.data.pausedReason
+          ? ` (${envelope.data.pausedReason})`
+          : '';
+      return envelopeResult(
+        {
+          ...envelope,
+          code: 'PENDING',
+          message:
+            envelope.message ??
+            `Run ${envelope.data.runId} is paused${where}${why}. A person must act in the editor; tell the user and poll run_status again.`
+        },
+        'Run paused'
+      );
+    }
+    return envelopeResult(
+      envelope,
+      envelope.data ? `Run ${envelope.data.runId}: ${envelope.data.status}` : 'Run status'
+    );
   }
 
   // ---- register -----------------------------------------------------------
@@ -327,13 +493,48 @@ export function attachWebMCP(
         description:
           'Save the workflow to the server. Nothing an agent changes is persisted until ' +
           'this runs or the person clicks Save. Asks for approval; cannot be undone from ' +
-          'the editor.' +
+          'the editor. Fails with FORBIDDEN when the user may not save, CONFLICT when the ' +
+          'server copy changed since it was loaded (reload the page), INVALID when the ' +
+          'server rejected the workflow — the message says which node or port.' +
           nameSuffix,
-        inputSchema: SAVE_INPUT_SCHEMA,
+        inputSchema: EMPTY_SCHEMA,
         annotations: { readOnlyHint: false, consequentialHint: true },
         execute: (input) => runSave(input)
       })
     );
+  }
+  if (options.onRun) {
+    toolRegistrations.push(
+      registerRaw({
+        name: `${prefix}_run`,
+        description:
+          'Run the saved workflow on the server with optional inputs for its interface ports. ' +
+          'Save first: unsaved changes are not part of the run. Asks for approval. Returns a ' +
+          '`runId`' +
+          (options.onRunStatus ? ' to poll with run_status.' : '.') +
+          ' Fails with FORBIDDEN when the user may not run, UNAVAILABLE when the workflow is not saved yet, ' +
+          'INVALID when the server rejected the workflow.' +
+          nameSuffix,
+        inputSchema: RUN_SCHEMA,
+        annotations: { readOnlyHint: false, consequentialHint: true },
+        execute: (input) => runRun(input)
+      })
+    );
+    if (options.onRunStatus) {
+      toolRegistrations.push(
+        registerRaw({
+          name: `${prefix}_run_status`,
+          description:
+            'Report the status of a run started with run: pending, running, paused, completed, failed or cancelled, ' +
+            'with outputs once it completed. A paused run answers code PENDING with the node and message it waits on — ' +
+            'a person must act in the editor; tell the user, then poll again. Read-only.' +
+            nameSuffix,
+          inputSchema: RUN_STATUS_SCHEMA,
+          annotations: { readOnlyHint: true },
+          execute: (input) => runRunStatus(input)
+        })
+      );
+    }
   }
 
   const ready = Promise.all(toolRegistrations).then(() => undefined);

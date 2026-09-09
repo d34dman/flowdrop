@@ -479,22 +479,28 @@ describe('attachWebMCP — confirm dialog', () => {
     expect((await pending).code).toBe('REJECTED');
   });
 
-  it('starts on Apply, traps Tab between the two buttons, and rejects on Escape', async () => {
+  it('starts on Apply, traps Tab inside the dialog, and rejects on Escape', async () => {
     const { runtime } = await setup('confirm');
     const pending = runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
     await tick();
     const approve = document.querySelector('[data-testid="flowdrop-webmcp-approve"]')!;
     const reject = document.querySelector('[data-testid="flowdrop-webmcp-reject"]')!;
+    const remember = document.querySelector('[data-testid="flowdrop-webmcp-remember"]')!;
     expect(document.activeElement).toBe(approve);
 
-    const key = (k: string) =>
+    const key = (k: string, shiftKey = false) =>
       document.activeElement!.dispatchEvent(
-        new KeyboardEvent('keydown', { key: k, bubbles: true })
+        new KeyboardEvent('keydown', { key: k, shiftKey, bubbles: true })
       );
+    // Apply → Reject → remember-edits → Apply, and back with Shift+Tab.
     key('Tab');
     expect(document.activeElement).toBe(reject);
     key('Tab');
+    expect(document.activeElement).toBe(remember);
+    key('Tab');
     expect(document.activeElement).toBe(approve);
+    key('Tab', true);
+    expect(document.activeElement).toBe(remember);
     key('Escape');
     expect((await pending).code).toBe('REJECTED');
     expect(dialog()).toBeNull();
@@ -619,5 +625,368 @@ describe('attachWebMCP — save', () => {
     const out = await runtime.call('flowdrop_save', { extra: true });
     expect(out.code).toBe('INVALID_ARGUMENTS');
     expect(onSave).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Read before you write — describe → batch → save (agent-authoring plan, Phase 1)
+// ---------------------------------------------------------------------------
+
+describe('attachWebMCP — describe, then build, then save', () => {
+  it('describe_type answers ports and config schema without the gate, then a batch builds and save persists', async () => {
+    const gate = vi.fn(async () => true);
+    const onSave = vi.fn(async () => {});
+    const { runtime, instance } = await setup(gate, { onSave });
+
+    const described = await runtime.call('flowdrop_describe_type', { nodeTypeId: 'text_input' });
+    expect(described.ok).toBe(true);
+    const data = described.data as {
+      typeId: string;
+      outputs: Array<{ portId: string; dataType: string }>;
+      config: Array<{ key: string; type: string }>;
+    };
+    expect(data.typeId).toBe('text_input');
+    expect(data.outputs).toEqual([{ portId: 'value', name: 'Value', dataType: 'string' }]);
+    expect(data.config).toEqual([{ key: 'defaultValue', type: 'string' }]);
+    expect(gate).not.toHaveBeenCalled();
+
+    const found = await runtime.call('flowdrop_search_types', { query: 'OUTPUT' });
+    expect((found.data as { types: Array<{ typeId: string }> }).types.map((t) => t.typeId)).toEqual(
+      ['text_output']
+    );
+
+    const built = await runtime.call('flowdrop_batch', {
+      commands: [
+        { type: 'add_node', nodeTypeId: 'text_input' },
+        { type: 'add_node', nodeTypeId: 'text_output' },
+        {
+          type: 'connect',
+          sourceNodeId: 'text_input.1',
+          sourcePort: 'value',
+          targetNodeId: 'text_output.1',
+          targetPort: 'text'
+        },
+        { type: 'set_config', nodeId: 'text_input.1', key: 'defaultValue', value: 'hello' }
+      ]
+    });
+    expect(built.ok).toBe(true);
+    expect(nodeCount(instance)).toBe(2);
+    expect(instance.workflow.current?.edges).toHaveLength(1);
+
+    const cfg = await runtime.call('flowdrop_get_config', { nodeId: 'text_input.1' });
+    expect((cfg.data as { values: Record<string, unknown> }).values).toEqual({
+      defaultValue: 'hello'
+    });
+    expect((cfg.data as { schema: unknown[] }).schema).toEqual([
+      { key: 'defaultValue', type: 'string' }
+    ]);
+
+    const saved = await runtime.call('flowdrop_save');
+    expect(saved.ok).toBe(true);
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // One approval per mutating call: the batch and the save.
+    expect(gate).toHaveBeenCalledTimes(2);
+  });
+
+  it('describe_type and get_config pass the host fields through untouched', async () => {
+    const withHost: NodeMetadata = {
+      ...textIn,
+      confirmation: { policy: 'ask', source: 'plugin' },
+      can: { add: true },
+      agent: { usage: 'Start of most flows.' }
+    };
+    const { runtime } = await setup('auto', { nodeTypes: [withHost, textOut] });
+    const out = await runtime.call('flowdrop_describe_type', { nodeTypeId: 'text_input' });
+    expect(out.data).toMatchObject({
+      confirmation: { policy: 'ask', source: 'plugin' },
+      can: { add: true },
+      agent: { usage: 'Start of most flows.' }
+    });
+  });
+
+  it('an unknown type teaches: names near misses and list_types', async () => {
+    const { runtime } = await setup('auto');
+    const out = await runtime.call('flowdrop_add_node', { nodeTypeId: 'text' });
+    expect(out.code).toBe('NODE_TYPE_NOT_FOUND');
+    expect(String(out.error)).toContain('Did you mean: text_input, text_output');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Host tools — run / run_status, envelope, can, CONFLICT (Phases 2–3)
+// ---------------------------------------------------------------------------
+
+describe('attachWebMCP — run and run_status', () => {
+  it('registers run only with onRun, and run_status only with both hooks', async () => {
+    const a = await setup('auto');
+    expect(a.runtime.tools.has('flowdrop_run')).toBe(false);
+    expect(a.runtime.tools.has('flowdrop_run_status')).toBe(false);
+
+    const b = await setup('auto', { onRun: async () => ({ ok: true, data: { runId: '1' } }) });
+    expect(b.runtime.tools.has('flowdrop_run')).toBe(true);
+    expect(b.runtime.tools.has('flowdrop_run_status')).toBe(false);
+    expect(b.runtime.tools.get('flowdrop_run')?.annotations?.consequentialHint).toBe(true);
+
+    const c = await setup('auto', {
+      onRun: async () => ({ ok: true, data: { runId: '1' } }),
+      onRunStatus: async (runId) => ({ ok: true, data: { runId, status: 'running' } })
+    });
+    expect(c.runtime.tools.has('flowdrop_run_status')).toBe(true);
+    expect(c.runtime.tools.get('flowdrop_run_status')?.annotations?.readOnlyHint).toBe(true);
+  });
+
+  it('run is gated, passes inputs to the hook, and relays the envelope', async () => {
+    const gate = vi.fn(async () => true);
+    const onRun = vi.fn(async (_inputs: Record<string, unknown>) => ({
+      ok: true,
+      data: { runId: '42', status: 'pending', queued: true },
+      message: 'Run started'
+    }));
+    const { runtime } = await setup(gate, { onRun });
+    const out = await runtime.call('flowdrop_run', { inputs: { url: 'https://x' } });
+    expect(out).toEqual({
+      ok: true,
+      message: 'Run started',
+      data: { runId: '42', status: 'pending', queued: true }
+    });
+    expect(onRun).toHaveBeenCalledWith({ url: 'https://x' });
+    expect(gate).toHaveBeenCalledTimes(1);
+    expect(gate.mock.calls[0][1]).toEqual({ tool: 'run' });
+  });
+
+  it('a host refusal comes back with the host code, not a thrown error', async () => {
+    const { runtime } = await setup('auto', {
+      onRun: async () => ({ ok: false, code: 'UNAVAILABLE', message: 'Save the workflow first' })
+    });
+    const out = await runtime.call('flowdrop_run');
+    expect(out).toEqual({ ok: false, code: 'UNAVAILABLE', error: 'Save the workflow first' });
+  });
+
+  it('run_status is a read and relays a paused run as PENDING with node and message', async () => {
+    const gate = vi.fn(async () => true);
+    const { runtime } = await setup(gate, {
+      onRun: async () => ({ ok: true, data: { runId: '7' } }),
+      onRunStatus: async (runId) => ({
+        ok: true,
+        data: {
+          runId,
+          status: 'paused',
+          pending: {
+            interruptId: 'i-1',
+            type: 'confirmation',
+            nodeId: 'http_request.1',
+            message: 'Allow the request?'
+          }
+        }
+      })
+    });
+    const out = await runtime.call('flowdrop_run_status', { runId: '7' });
+    expect(gate).not.toHaveBeenCalled();
+    expect(out.ok).toBe(true);
+    expect(out.code).toBe('PENDING');
+    expect(String(out.message)).toContain('http_request.1');
+    expect(String(out.message)).toContain('Allow the request?');
+    expect(String(out.message)).toContain('person');
+    expect((out.data as { pending: { interruptId: string } }).pending.interruptId).toBe('i-1');
+  });
+
+  it('run_status relays a completed run with its outputs', async () => {
+    const { runtime } = await setup('auto', {
+      onRun: async () => ({ ok: true, data: { runId: '7' } }),
+      onRunStatus: async (runId) => ({
+        ok: true,
+        data: { runId, status: 'completed', outputs: { markdown: '# Hi' } }
+      })
+    });
+    const out = await runtime.call('flowdrop_run_status', { runId: '7' });
+    expect(out.ok).toBe(true);
+    expect(out.code).toBeUndefined();
+    expect(out.message).toBe('Run 7: completed');
+    expect((out.data as { outputs: unknown }).outputs).toEqual({ markdown: '# Hi' });
+  });
+
+  it('run_status without a runId is an argument error', async () => {
+    const { runtime } = await setup('auto', {
+      onRun: async () => ({ ok: true, data: { runId: '7' } }),
+      onRunStatus: async (runId) => ({ ok: true, data: { runId, status: 'running' } })
+    });
+    const out = await runtime.call('flowdrop_run_status', {});
+    expect(out.code).toBe('INVALID_ARGUMENTS');
+  });
+});
+
+describe('attachWebMCP — can and CONFLICT', () => {
+  it('pre-empts save and run with FORBIDDEN when the workflow says the user may not', async () => {
+    const gate = vi.fn(async () => true);
+    const onSave = vi.fn(async () => {});
+    const onRun = vi.fn(async () => ({ ok: true, data: { runId: '1' } }));
+    const { runtime, instance } = await setup(gate, { onSave, onRun });
+    instance.workflow.acknowledgeServer({ can: { save: false, run: false } });
+
+    expect(await runtime.call('flowdrop_save')).toEqual({
+      ok: false,
+      code: 'FORBIDDEN',
+      error: expect.stringContaining('not permitted')
+    });
+    expect((await runtime.call('flowdrop_run')).code).toBe('FORBIDDEN');
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onRun).not.toHaveBeenCalled();
+    // Pre-empted before the gate: the person is not asked to approve a refusal.
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it('when the host says nothing about can, the server decides', async () => {
+    const onSave = vi.fn(async () => {});
+    const { runtime } = await setup('auto', { onSave });
+    expect((await runtime.call('flowdrop_save')).ok).toBe(true);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('a thrown 409 from onSave is relayed as CONFLICT with a reload hint', async () => {
+    const conflict = Object.assign(new Error('The workflow changed on the server'), {
+      status: 409,
+      errorData: { error_code: 'CONFLICT' }
+    });
+    const { runtime } = await setup('auto', {
+      onSave: async () => {
+        throw conflict;
+      }
+    });
+    const out = await runtime.call('flowdrop_save');
+    expect(out.code).toBe('CONFLICT');
+    expect(String(out.error)).toContain('reload');
+  });
+
+  it('an envelope returned by onSave is relayed as-is', async () => {
+    const { runtime } = await setup('auto', {
+      onSave: async () => ({
+        ok: false,
+        code: 'INVALID',
+        message: 'Port text on text_output.1 is not connected',
+        can: { save: true }
+      })
+    });
+    const out = await runtime.call('flowdrop_save');
+    expect(out).toEqual({
+      ok: false,
+      code: 'INVALID',
+      error: 'Port text on text_output.1 is not connected',
+      can: { save: true }
+    });
+  });
+
+  it('any other thrown error stays SAVE_FAILED', async () => {
+    const { runtime } = await setup('auto', {
+      onSave: async () => {
+        throw new Error('boom');
+      }
+    });
+    expect(await runtime.call('flowdrop_save')).toEqual({
+      ok: false,
+      code: 'SAVE_FAILED',
+      error: 'boom'
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dialog ergonomics — batch summary, remember edits (Phase 3)
+// ---------------------------------------------------------------------------
+
+describe('attachWebMCP — batch summary and remembered edits', () => {
+  const dialog = () => document.querySelector('[data-testid="flowdrop-webmcp-confirm"]');
+  const click = (testid: string) =>
+    (document.querySelector(`[data-testid="${testid}"]`) as HTMLElement).click();
+
+  it('a batch shows a change summary above the lines', async () => {
+    const { runtime } = await setup('confirm');
+    const pending = runtime.call('flowdrop_batch', {
+      commands: [
+        { type: 'add_node', nodeTypeId: 'text_input' },
+        { type: 'add_node', nodeTypeId: 'text_output' },
+        {
+          type: 'connect',
+          sourceNodeId: 'text_input.1',
+          sourcePort: 'value',
+          targetNodeId: 'text_output.1',
+          targetPort: 'text'
+        },
+        { type: 'set_config', nodeId: 'text_input.1', key: 'defaultValue', value: 'x' }
+      ]
+    });
+    await tick();
+    expect(dialog()?.textContent).toContain(
+      '4 changes — adds 2 nodes, connects 1 edge, sets 1 config key.'
+    );
+    expect(dialog()?.textContent).toContain('Add node text_input');
+    click('flowdrop-webmcp-approve');
+    expect((await pending).ok).toBe(true);
+  });
+
+  it('a single change keeps the one-change hint', async () => {
+    const { runtime } = await setup('confirm');
+    const pending = runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
+    await tick();
+    expect(dialog()?.textContent).toContain('1 change — applied together');
+    click('flowdrop-webmcp-reject');
+    await pending;
+  });
+
+  it('ticking "apply further edits" skips the dialog for later edits but never for save or run', async () => {
+    const onSave = vi.fn(async () => {});
+    const { runtime, instance } = await setup('confirm', { onSave });
+
+    // The checkbox is offered for an edit …
+    const first = runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
+    await tick();
+    const box = document.querySelector(
+      '[data-testid="flowdrop-webmcp-remember"]'
+    ) as HTMLInputElement;
+    expect(box).not.toBeNull();
+    box.click();
+    expect(box.checked).toBe(true);
+    click('flowdrop-webmcp-approve');
+    expect((await first).ok).toBe(true);
+
+    // … and a later edit runs without a dialog.
+    const second = await runtime.call('flowdrop_add_node', { nodeTypeId: 'text_output' });
+    expect(second.ok).toBe(true);
+    expect(dialog()).toBeNull();
+    expect(nodeCount(instance)).toBe(2);
+
+    // Save still asks, and does not offer the checkbox.
+    const save = runtime.call('flowdrop_save');
+    await tick();
+    expect(dialog()).not.toBeNull();
+    expect(document.querySelector('[data-testid="flowdrop-webmcp-remember"]')).toBeNull();
+    click('flowdrop-webmcp-approve');
+    expect((await save).ok).toBe(true);
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejecting with the box ticked remembers nothing', async () => {
+    const { runtime } = await setup('confirm');
+    const first = runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
+    await tick();
+    (
+      document.querySelector('[data-testid="flowdrop-webmcp-remember"]') as HTMLInputElement
+    ).click();
+    click('flowdrop-webmcp-reject');
+    expect((await first).code).toBe('REJECTED');
+
+    const second = runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
+    await tick();
+    expect(dialog()).not.toBeNull();
+    click('flowdrop-webmcp-reject');
+    await second;
+  });
+
+  it('rememberEdits: false hides the checkbox', async () => {
+    const { runtime } = await setup('confirm', { rememberEdits: false });
+    const pending = runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
+    await tick();
+    expect(document.querySelector('[data-testid="flowdrop-webmcp-remember"]')).toBeNull();
+    click('flowdrop-webmcp-reject');
+    await pending;
   });
 });

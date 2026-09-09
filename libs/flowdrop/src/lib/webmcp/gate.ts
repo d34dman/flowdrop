@@ -8,6 +8,12 @@
  * change the user's document. Any agent or extension on the page can call a
  * tool, so the gate must not be weaker than the chat panel's click-to-apply.
  *
+ * Two ergonomics live here too. A batch shows a *summary* of what changes
+ * (nodes added, edges connected, config keys set) above the line list, so the
+ * person reads what the agent is doing rather than a verb list. And the
+ * dialog can offer "apply further edits without asking" for the rest of the
+ * page's life — edits only: `save` and `run` are consequential and always ask.
+ *
  * @module webmcp/gate
  */
 
@@ -23,12 +29,18 @@ import WebMCPConfirm from './WebMCPConfirm.svelte';
 export interface GateRequest extends WebMCPApprovalRequest {
   /**
    * Dialog lines, one per command. Defaults to `commands.map(describeCommand)`;
-   * `save` has no commands to describe, so the gate fills in the save line
-   * itself when this is omitted and `tool === 'save'`.
+   * `save` and `run` have no commands to describe, so the gate fills in their
+   * line itself when this is omitted.
    */
   lines?: string[];
   /** Extra sentence shown under the title, e.g. "This cannot be undone." */
   hint?: string;
+  /**
+   * A consequential call (`save`, `run`) is never covered by the "don't ask
+   * again for edits" choice and never offers it. Defaults to `tool` being
+   * `save` or `run`.
+   */
+  consequential?: boolean;
 }
 
 export interface ApprovalGate {
@@ -40,6 +52,8 @@ export interface ApprovalGate {
   request(commands: Command[], request: GateRequest): Promise<boolean>;
   /** True while a decision is pending. */
   readonly busy: boolean;
+  /** True once the person chose to apply further edits without asking. */
+  readonly editsPreApproved: boolean;
   /** Dismiss any open dialog (as a rejection) and release resources. */
   dispose(): void;
 }
@@ -59,6 +73,55 @@ export interface CreateGateOptions {
   editorName: () => string;
   /** Strings for the dialog, as a partial override or a getter for one. */
   messages?: MessagesOverride | (() => MessagesOverride);
+  /** Offer the "don't ask again for edits" choice. Default true. */
+  rememberEdits?: boolean;
+}
+
+const CONSEQUENTIAL_TOOLS: ReadonlySet<string> = new Set(['save', 'run']);
+
+/**
+ * One sentence saying what a list of commands does, for the dialog's hint:
+ * "3 changes — adds 2 nodes, connects 1 edge. Applied together, undone together."
+ * Returns `undefined` for a single command, whose one line already says it all.
+ */
+export function summarizeCommands(commands: Command[], m: Messages['webmcp']): string | undefined {
+  if (commands.length < 2) return undefined;
+  let adds = 0;
+  let deletes = 0;
+  let connects = 0;
+  let disconnects = 0;
+  let configs = 0;
+  let other = 0;
+  for (const c of commands) {
+    switch (c.type) {
+      case 'add_node':
+        adds++;
+        break;
+      case 'delete_node':
+        deletes++;
+        break;
+      case 'connect':
+        connects++;
+        break;
+      case 'disconnect_ports':
+      case 'disconnect_node':
+        disconnects++;
+        break;
+      case 'set_config':
+        configs++;
+        break;
+      default:
+        other++;
+    }
+  }
+  const parts: string[] = [];
+  if (adds) parts.push(m.summaryAdds({ count: adds }));
+  if (deletes) parts.push(m.summaryDeletes({ count: deletes }));
+  if (connects) parts.push(m.summaryConnects({ count: connects }));
+  if (disconnects) parts.push(m.summaryDisconnects({ count: disconnects }));
+  if (configs) parts.push(m.summaryConfigs({ count: configs }));
+  if (other) parts.push(m.summaryOther({ count: other }));
+  return m.batchSummary({ count: commands.length, parts: parts.join(', ') });
 }
 
 export function createApprovalGate(
@@ -67,6 +130,8 @@ export function createApprovalGate(
 ): ApprovalGate {
   let pending = false;
   let dismiss: (() => void) | null = null;
+  let editsPreApproved = false;
+  const offerRemember = options.rememberEdits ?? true;
 
   // The dialog mounts outside any component tree, so it gets its messages
   // through the same context the root component would have provided. Read
@@ -76,25 +141,33 @@ export function createApprovalGate(
     return mergeMessages(defaultMessages, typeof override === 'function' ? override() : override);
   };
 
+  const isConsequential = (request: GateRequest): boolean =>
+    request.consequential ?? CONSEQUENTIAL_TOOLS.has(request.tool);
+
   async function decide(commands: Command[], request: GateRequest): Promise<boolean> {
     if (approval === 'auto') return true;
     if (typeof approval === 'function') return approval(commands, { tool: request.tool });
+    // The person's earlier "don't ask again" covers edits, never save or run.
+    if (editsPreApproved && !isConsequential(request)) return true;
     return confirmInPage(commands, request);
   }
 
   // `lines`/`hint` default from the commands for an ordinary change; `save`
-  // has no commands, so it gets its own dialog copy from the messages system.
+  // and `run` have no commands, so they get their own dialog copy.
   function resolveLines(commands: Command[], request: GateRequest): string[] {
     if (request.lines) return request.lines;
-    if (request.tool === 'save') {
-      return [messages().webmcp.saveLine({ name: options.editorName() })];
-    }
+    const m = messages().webmcp;
+    if (request.tool === 'save') return [m.saveLine({ name: options.editorName() })];
+    if (request.tool === 'run') return [m.runLine({ name: options.editorName() })];
     return commands.map(describeCommand);
   }
 
-  function resolveHint(request: GateRequest): string | undefined {
+  function resolveHint(commands: Command[], request: GateRequest): string | undefined {
     if (request.hint !== undefined) return request.hint;
-    return request.tool === 'save' ? messages().webmcp.saveHint : undefined;
+    const m = messages().webmcp;
+    if (request.tool === 'save') return m.saveHint;
+    if (request.tool === 'run') return m.runHint;
+    return summarizeCommands(commands, m);
   }
 
   function confirmInPage(commands: Command[], request: GateRequest): Promise<boolean> {
@@ -109,12 +182,13 @@ export function createApprovalGate(
       host.className = 'fd-webmcp-confirm-host';
       target.appendChild(host);
 
-      const finish = (approved: boolean): void => {
+      const finish = (approved: boolean, remember = false): void => {
         if (settled) return;
         settled = true;
         dismiss = null;
         void unmount(component);
         host.remove();
+        if (approved && remember) editsPreApproved = true;
         resolve(approved);
       };
 
@@ -124,7 +198,8 @@ export function createApprovalGate(
         props: {
           editorName: options.editorName(),
           lines: resolveLines(commands, request),
-          hint: resolveHint(request),
+          hint: resolveHint(commands, request),
+          offerRemember: offerRemember && !isConsequential(request),
           onResolve: finish
         }
       });
@@ -136,6 +211,9 @@ export function createApprovalGate(
   return {
     get busy() {
       return pending;
+    },
+    get editsPreApproved() {
+      return editsPreApproved;
     },
     async request(commands, request) {
       if (pending) throw new GateBusyError();

@@ -128,6 +128,86 @@ export interface ModelContextLike {
 }
 
 // ============================================================================
+// Host hooks — the envelope (D6 of the agent-authoring plan)
+// ============================================================================
+
+/**
+ * Stable codes a host hook (`onSave`, `onRun`, `onRunStatus`) may answer with.
+ * They align with fddo's API-8 `error_code` vocabulary where the two meet
+ * (`CONFLICT`, `NOT_FOUND`); the rest name what a browser agent must do next.
+ *
+ * - `FORBIDDEN` — the server refused; the agent should tell the user.
+ * - `UNAVAILABLE` — nothing to act on yet (unsaved workflow, no runtime).
+ * - `NEEDS_APPROVAL` — a person must approve in the UI first.
+ * - `INVALID` — the workflow failed validation; `message` says where.
+ * - `CONFLICT` — the server copy changed since it was loaded; reload.
+ * - `PENDING` — a run is paused for a person (never for the agent, D8).
+ * - `NOT_FOUND` — the run id is unknown.
+ */
+export type HostCode =
+  | 'FORBIDDEN'
+  | 'UNAVAILABLE'
+  | 'NEEDS_APPROVAL'
+  | 'INVALID'
+  | 'CONFLICT'
+  | 'PENDING'
+  | 'NOT_FOUND'
+  | (string & Record<never, never>);
+
+/**
+ * What every host hook returns. `ok: false` needs a `code`; `ok: true` may
+ * still carry one (`PENDING`). `can` lets a host refresh what the user may do
+ * after the call — passed through to the agent untouched.
+ */
+export interface HostEnvelope<T = unknown> {
+  ok: boolean;
+  code?: HostCode;
+  message?: string;
+  data?: T;
+  can?: Record<string, boolean>;
+}
+
+/** What `onRun` reports back once a run is accepted. */
+export interface RunStarted {
+  /** The id `run_status` polls with. */
+  runId: string;
+  status?: string;
+  queued?: boolean;
+}
+
+/** The person-facing pause a paused run is waiting on (D8: no tool answers it). */
+export interface RunPending {
+  interruptId?: string;
+  type?: string;
+  nodeId?: string;
+  message?: string;
+}
+
+/** What `onRunStatus` reports. `status` vocabulary is the host's; `paused` is special-cased. */
+export interface RunStatus {
+  runId: string;
+  status:
+    | 'pending'
+    | 'running'
+    | 'paused'
+    | 'completed'
+    | 'failed'
+    | 'cancelled'
+    | (string & Record<never, never>);
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  /** Set when `status` is `paused` and a person must act. */
+  pending?: RunPending | null;
+  /** Why an execution budget paused the run, when it did. */
+  pausedReason?: string | null;
+  /** The run's output once it has one. Host-shaped. */
+  outputs?: unknown;
+  /** Per-node status once the host has it. Host-shaped. */
+  nodeStatuses?: unknown;
+  error?: string;
+}
+
+// ============================================================================
 // Options and handle
 // ============================================================================
 
@@ -176,8 +256,34 @@ export interface WebMCPOptions {
    * is registered; it is gated like a change because a save cannot be
    * undone from the editor. When omitted the tool is not registered —
    * there is nothing it could do.
+   *
+   * May resolve to nothing (saved) or to a {@link HostEnvelope} — e.g.
+   * `{ok: false, code: 'CONFLICT'}` when the server copy moved on. A thrown
+   * error is reported as `SAVE_FAILED`, except an error whose `errorData.error_code`
+   * or `status` says conflict, which is relayed as `CONFLICT`.
    */
-  onSave?: () => Promise<void>;
+  onSave?: () => Promise<void | HostEnvelope>;
+  /**
+   * Start a run of the workflow being edited, with optional inputs for its
+   * interface ports. When supplied, a `run` tool is registered — gated like
+   * `save`, and flagged consequential — and `run_status` too when
+   * {@link onRunStatus} is also given. The hook answers with an envelope; the
+   * tool relays it. `data.runId` is what `run_status` polls with.
+   */
+  onRun?: (inputs: Record<string, unknown>) => Promise<HostEnvelope<RunStarted>>;
+  /**
+   * Report a run's status. A read: never gated. `status: 'paused'` is relayed
+   * as `code: 'PENDING'` with `pending.nodeId` / `pending.message` — the agent
+   * tells the person, and the person acts in the UI (D8).
+   */
+  onRunStatus?: (runId: string) => Promise<HostEnvelope<RunStatus>>;
+  /**
+   * Offer "don't ask again for edits in this session" in the confirm dialog.
+   * Ticked, later *edits* run without the dialog until the adapter detaches;
+   * `save` and `run` always ask. Default true. Irrelevant unless `approval`
+   * is `'confirm'`.
+   */
+  rememberEdits?: boolean;
   /** Where the built-in confirm dialog mounts. Default `document.body`. */
   container?: HTMLElement;
   /**

@@ -85,15 +85,43 @@
   fd.workflow.initialize(workflow);
 
   let attached = $state<'pending' | 'attached' | 'no-runtime'>('pending');
-  // The page has no server; `save` counts calls so the spec can see the
-  // gate → onSave chain end to end.
+  // The page has no server; `save` and `run` count calls so the spec can see
+  // the gate → hook chain end to end, and `run_status` answers from a script:
+  // first paused (a person must act), then completed with an output.
   let saves = $state(0);
+  let runs = $state(0);
+  let polls = 0;
 
   onMount(() => {
     const handle = attachWebMCP(fd, {
       nodeTypes,
       onSave: async () => {
         saves += 1;
+      },
+      onRun: async (inputs) => {
+        runs += 1;
+        return {
+          ok: true,
+          data: { runId: `run-${runs}`, status: 'pending', queued: true, inputs }
+        };
+      },
+      onRunStatus: async (runId) => {
+        polls += 1;
+        return polls === 1
+          ? {
+              ok: true,
+              data: {
+                runId,
+                status: 'paused',
+                pending: {
+                  interruptId: 'i-1',
+                  type: 'confirmation',
+                  nodeId: 'text_output.1',
+                  message: 'Approve?'
+                }
+              }
+            }
+          : { ok: true, data: { runId, status: 'completed', outputs: { text: 'hello' } } };
       }
     });
     attached = handle ? 'attached' : 'no-runtime';
@@ -101,6 +129,12 @@
   });
 </script>
 
-<div data-testid="webmcp-test" data-webmcp={attached} data-saves={saves} style="height: 100vh;">
+<div
+  data-testid="webmcp-test"
+  data-webmcp={attached}
+  data-saves={saves}
+  data-runs={runs}
+  style="height: 100vh;"
+>
   <App instance={fd} nodes={nodeTypes} {workflow} height="100%" />
 </div>

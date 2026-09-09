@@ -556,6 +556,25 @@ export const defaultMessages = {
     reject: 'Reject',
     apply: 'Apply',
     saveLine: ({ name }: { name: string }) => `Save “${name}” to the server`,
-    saveHint: 'Writes the workflow to the server. This cannot be undone from the editor.'
+    saveHint: 'Writes the workflow to the server. This cannot be undone from the editor.',
+    runLine: ({ name }: { name: string }) => `Run “${name}” on the server`,
+    runHint: 'Starts a run of the saved workflow. Unsaved changes are not part of it.',
+    /** One clause per kind of change; joined into the batch summary. */
+    summaryAdds: ({ count }: { count: number }) =>
+      `adds ${count} ${count === 1 ? 'node' : 'nodes'}`,
+    summaryDeletes: ({ count }: { count: number }) =>
+      `deletes ${count} ${count === 1 ? 'node' : 'nodes'}`,
+    summaryConnects: ({ count }: { count: number }) =>
+      `connects ${count} ${count === 1 ? 'edge' : 'edges'}`,
+    summaryDisconnects: ({ count }: { count: number }) =>
+      `removes ${count} ${count === 1 ? 'edge' : 'edges'}`,
+    summaryConfigs: ({ count }: { count: number }) =>
+      `sets ${count} config ${count === 1 ? 'key' : 'keys'}`,
+    summaryOther: ({ count }: { count: number }) =>
+      `${count} other ${count === 1 ? 'change' : 'changes'}`,
+    /** `{count} changes — adds 2 nodes, connects 1 edge. Applied together, undone together.` */
+    batchSummary: ({ count, parts }: { count: number; parts: string }) =>
+      `${count} changes — ${parts}. Applied together, undone together.`,
+    rememberEdits: 'Apply further edits from this agent without asking, until this page is closed'
   }
 } as const;

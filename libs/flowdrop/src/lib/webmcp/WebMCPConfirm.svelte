@@ -22,25 +22,37 @@
      * hint, e.g. for `save`, which has no commands to count.
      */
     hint?: string;
-    /** Called exactly once with the decision. */
-    onResolve: (approved: boolean) => void;
+    /**
+     * Show the "apply further edits without asking" checkbox. Off for
+     * consequential calls (`save`, `run`), which always ask.
+     */
+    offerRemember?: boolean;
+    /** Called exactly once with the decision and whether to remember it for edits. */
+    onResolve: (approved: boolean, remember?: boolean) => void;
   }
 
-  let { editorName, lines, hint, onResolve }: Props = $props();
+  let { editorName, lines, hint, offerRemember = false, onResolve }: Props = $props();
 
   let rejectButton = $state<HTMLButtonElement | null>(null);
   let approveButton = $state<HTMLButtonElement | null>(null);
+  let rememberBox = $state<HTMLInputElement | null>(null);
+  let remember = $state(false);
 
-  // Focus starts on Apply and stays inside the dialog: Tab and Shift+Tab move
-  // between the two buttons, Escape rejects. The handler sits on the dialog
-  // itself, which holds focus through its buttons, not on the window.
+  // Focus starts on Apply and stays inside the dialog: Tab cycles Apply →
+  // Reject → (checkbox) → Apply, Escape rejects. The handler sits on the
+  // dialog itself, which holds focus through its controls, not on the window.
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       event.preventDefault();
       onResolve(false);
     } else if (event.key === 'Tab') {
       event.preventDefault();
-      (document.activeElement === approveButton ? rejectButton : approveButton)?.focus();
+      const order = [approveButton, rejectButton, rememberBox].filter(
+        (el): el is HTMLButtonElement | HTMLInputElement => el !== null
+      );
+      const i = order.indexOf(document.activeElement as HTMLButtonElement | HTMLInputElement);
+      const step = event.shiftKey ? -1 : 1;
+      order[(i + step + order.length) % order.length]?.focus();
     }
   }
 </script>
@@ -66,6 +78,17 @@
         <li class="fd-webmcp-confirm__line">{line}</li>
       {/each}
     </ol>
+    {#if offerRemember}
+      <label class="fd-webmcp-confirm__remember">
+        <input
+          type="checkbox"
+          data-testid="flowdrop-webmcp-remember"
+          bind:this={rememberBox}
+          bind:checked={remember}
+        />
+        {m().webmcp.rememberEdits}
+      </label>
+    {/if}
     <div class="fd-webmcp-confirm__actions">
       <button
         type="button"
@@ -82,7 +105,7 @@
         data-testid="flowdrop-webmcp-approve"
         bind:this={approveButton}
         {@attach focusOnMount()}
-        onclick={() => onResolve(true)}
+        onclick={() => onResolve(true, remember)}
       >
         {m().webmcp.apply}
       </button>
@@ -143,6 +166,21 @@
   .fd-webmcp-confirm__line {
     padding: 0.125rem 0;
     overflow-wrap: anywhere;
+  }
+
+  .fd-webmcp-confirm__remember {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--fd-space-sm, 0.5rem);
+    margin: 0 0 var(--fd-space-lg, 1rem);
+    font-size: var(--fd-text-sm, 0.875rem);
+    color: var(--fd-muted-foreground, #71717a);
+    cursor: pointer;
+  }
+
+  .fd-webmcp-confirm__remember input {
+    margin: 0.2em 0 0;
+    accent-color: var(--fd-primary, #2563eb);
   }
 
   .fd-webmcp-confirm__actions {

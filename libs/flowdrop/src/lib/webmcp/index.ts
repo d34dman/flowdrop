@@ -49,6 +49,12 @@ export type {
   RegisterToolOptions,
   ModelContextLike,
   WebMCPApproval,
+  WebMCPApprovalRequest,
+  HostCode,
+  HostEnvelope,
+  RunStarted,
+  RunPending,
+  RunStatus,
   WebMCPOptions,
   WebMCPMountOptions,
   WebMCPHandle

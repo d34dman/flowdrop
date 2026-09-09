@@ -191,7 +191,10 @@ export async function globalSaveWorkflow(options: GlobalSaveOptions = {}): Promi
       // Explicit key list, so every contract field must be named here:
       // omitting `interface` silently strips the declared contract on save
       // (absent means "declares no interface" to the server).
-      ...(currentWorkflow.interface !== undefined && { interface: currentWorkflow.interface })
+      ...(currentWorkflow.interface !== undefined && { interface: currentWorkflow.interface }),
+      // The revision the editor loaded, so a server that checks it can refuse
+      // a stale write (409 CONFLICT) instead of letting the last write win.
+      ...(currentWorkflow.revision !== undefined && { revision: currentWorkflow.revision })
     };
 
     // Step 4 — Persist via this instance's API client.
@@ -213,6 +216,11 @@ export async function globalSaveWorkflow(options: GlobalSaveOptions = {}): Promi
         }
       });
     }
+
+    // Step 5b — The save minted a new revision (and may have refreshed what the
+    // user may do); take the server's word so the next save sends the current
+    // stamp rather than the one this save just superseded.
+    fd.workflow.acknowledgeServer({ revision: savedWorkflow.revision, can: savedWorkflow.can });
 
     // Step 6a — Mark dirty state as clean
     if (onMarkAsSaved) {

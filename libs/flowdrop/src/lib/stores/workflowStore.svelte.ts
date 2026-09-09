@@ -450,6 +450,21 @@ export class WorkflowStore {
   }
 
   /**
+   * Take the server's word on the workflow's revision and permissions after a
+   * save or reload. Bookkeeping only: no history entry, no dirty flag, no
+   * change notification — the document the user edits is unchanged. Keys the
+   * server did not send are left as they were.
+   */
+  acknowledgeServer(state: { revision?: Workflow['revision']; can?: Workflow['can'] }): void {
+    if (!this.#workflow) return;
+    this.#workflow = {
+      ...this.#workflow,
+      ...(state.revision !== undefined && { revision: state.revision }),
+      ...(state.can !== undefined && { can: state.can })
+    };
+  }
+
+  /**
    * Set the restoring from history flag.
    *
    * Used internally by the history store when performing undo/redo.

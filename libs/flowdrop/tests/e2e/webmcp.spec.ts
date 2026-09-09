@@ -157,6 +157,91 @@ test.describe('WebMCP editor tools', () => {
     await expect(page.getByTestId('webmcp-test')).toHaveAttribute('data-saves', '1');
   });
 
+  test('describe → batch → save → run → run_status, one approval per consequential step', async ({
+    page
+  }) => {
+    // Read before you write: describe_type answers ports and schema, no dialog.
+    await startCall(page, 'flowdrop_describe_type', { nodeTypeId: 'text_input' });
+    const described = await awaitResult(page);
+    expect(described.ok).toBe(true);
+    const data = described.data as {
+      outputs: Array<{ portId: string }>;
+      config: Array<{ key: string; type: string }>;
+    };
+    expect(data.outputs.map((p) => p.portId)).toEqual(['value']);
+    expect(data.config).toEqual([
+      { key: 'defaultValue', type: 'string', title: 'Default Value', default: '' }
+    ]);
+    await expect(page.getByTestId('flowdrop-webmcp-confirm')).toHaveCount(0);
+
+    // One batch, one dialog, with a summary of what changes.
+    await startCall(page, 'flowdrop_batch', {
+      commands: [
+        { type: 'add_node', nodeTypeId: 'text_input' },
+        { type: 'set_config', nodeId: 'text_input.2', key: 'defaultValue', value: 'hi' }
+      ]
+    });
+    const dialog = page.getByTestId('flowdrop-webmcp-confirm');
+    await expect(dialog).toContainText('2 changes — adds 1 node, sets 1 config key.');
+    await expect(page.getByTestId('flowdrop-webmcp-remember')).toBeVisible();
+    await page.getByTestId('flowdrop-webmcp-approve').click();
+    expect((await awaitResult(page)).ok).toBe(true);
+    await expectNodeCount(page, 3);
+
+    // Save asks (and does not offer "don't ask again").
+    await startCall(page, 'flowdrop_save', {});
+    await expect(dialog).toContainText('Save “WebMCP E2E” to the server');
+    await expect(page.getByTestId('flowdrop-webmcp-remember')).toHaveCount(0);
+    await page.getByTestId('flowdrop-webmcp-approve').click();
+    expect((await awaitResult(page)).ok).toBe(true);
+    await expect(page.getByTestId('webmcp-test')).toHaveAttribute('data-saves', '1');
+
+    // Run asks too, then hands back a run id.
+    await startCall(page, 'flowdrop_run', { inputs: { greeting: 'hi' } });
+    await expect(dialog).toContainText('Run “WebMCP E2E” on the server');
+    await page.getByTestId('flowdrop-webmcp-approve').click();
+    const started = await awaitResult(page);
+    expect(started.ok).toBe(true);
+    expect((started.data as { runId: string }).runId).toBe('run-1');
+    await expect(page.getByTestId('webmcp-test')).toHaveAttribute('data-runs', '1');
+
+    // run_status is a read: a paused run is PENDING with the node and message …
+    await startCall(page, 'flowdrop_run_status', { runId: 'run-1' });
+    const paused = await awaitResult(page);
+    expect(paused.ok).toBe(true);
+    expect(paused.code).toBe('PENDING');
+    expect(String(paused.message)).toContain('text_output.1');
+    expect(String(paused.message)).toContain('Approve?');
+    await expect(page.getByTestId('flowdrop-webmcp-confirm')).toHaveCount(0);
+
+    // … and a completed run carries its outputs.
+    await startCall(page, 'flowdrop_run_status', { runId: 'run-1' });
+    const done = await awaitResult(page);
+    expect(done.code).toBeUndefined();
+    expect((done.data as { status: string; outputs: unknown }).status).toBe('completed');
+    expect((done.data as { outputs: unknown }).outputs).toEqual({ text: 'hello' });
+  });
+
+  test('"apply further edits" skips later edit dialogs, never the save dialog', async ({
+    page
+  }) => {
+    await startCall(page, 'flowdrop_add_node', { nodeTypeId: 'text_input' });
+    await page.getByTestId('flowdrop-webmcp-remember').check();
+    await page.getByTestId('flowdrop-webmcp-approve').click();
+    expect((await awaitResult(page)).ok).toBe(true);
+    await expectNodeCount(page, 3);
+
+    await startCall(page, 'flowdrop_add_node', { nodeTypeId: 'text_output' });
+    expect((await awaitResult(page)).ok).toBe(true);
+    await expectNodeCount(page, 4);
+    await expect(page.getByTestId('flowdrop-webmcp-confirm')).toHaveCount(0);
+
+    await startCall(page, 'flowdrop_save', {});
+    await expect(page.getByTestId('flowdrop-webmcp-confirm')).toBeVisible();
+    await page.getByTestId('flowdrop-webmcp-reject').click();
+    expect((await awaitResult(page)).code).toBe('REJECTED');
+  });
+
   test('rejecting leaves the workflow untouched', async ({ page }) => {
     await startCall(page, 'flowdrop_delete_node', { nodeId: 'text_output.1' });
     await page.getByTestId('flowdrop-webmcp-reject').click();
