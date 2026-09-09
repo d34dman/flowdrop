@@ -33,3 +33,65 @@
     border-color var(--fd-transition-fast),
     box-shadow var(--fd-transition-fast);
 }
+
+/*
+ * Dismissible toasts (errors, warnings): headline, optional reason list and a
+ * close button, rendered by DismissibleToast.svelte inside the library's
+ * `.message` flex row.
+ */
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-headline {
+  margin: 0;
+}
+
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-details {
+  margin: var(--fd-space-xs, 4px) 0 0;
+  padding-inline-start: 1.1em;
+  color: var(--fd-muted-foreground, inherit);
+  font-size: var(--fd-text-xs, 0.85em);
+}
+
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-details li + li {
+  margin-top: 2px;
+}
+
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-close {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-inline-start: var(--fd-space-sm, 8px);
+  padding: var(--fd-space-xs, 4px);
+  border: 0;
+  border-radius: var(--fd-radius-sm, 4px);
+  background: transparent;
+  color: var(--fd-muted-foreground, inherit);
+  cursor: pointer;
+  line-height: 0;
+}
+
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-close:hover {
+  background: var(--fd-muted, rgba(0, 0, 0, 0.06));
+  color: var(--fd-card-foreground, inherit);
+}
+
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-close:focus-visible {
+  outline: 2px solid var(--fd-ring, var(--fd-primary));
+  outline-offset: 1px;
+}
+
+/* Warning variant: same persistence as an error, its own colour so it reads as one. */
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-bar--warning {
+  border-color: var(--fd-warning, #f59e0b) !important;
+}
+
+.flowdrop-toaster.flowdrop-toaster .flowdrop-toast-warning-icon {
+  flex: 0 0 auto;
+}

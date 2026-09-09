@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Error and warning toasts stay until dismissed.** `TOAST_DURATION.ERROR` and `TOAST_DURATION.WARNING` are now `Infinity`; both toasts carry a close button, and a toast with the same text replaces the one already showing instead of stacking. This is a policy change for the exported `showWarning`: the editor treats a warning as something the user should act on, not a "done, by the way". A caller that wants an informational warning passes a finite `duration`. Warnings also wear their own icon and colour instead of the error's.
+- **The API client retries only what can change.** Network failures, 408, 429 and 5xx are retried; every other 4xx is a refusal and is thrown at once. A stale save used to send three PUTs and get three 409s.
+
+### Added
+
+- **API refusals arrive with their reasons.** `ApiError.details` holds the server's reasons behind `message` — for a fddo validation failure the `details[].message` strings, for a 403 the permission the user lacks. Error toasts render them as a list under the headline, the WebMCP `save` tool relays them to the agent, and the exported `ToastOptions.details` / `ToastOptions.id` let a host do the same. New exports: `parseApiErrorBody`, `errorDetails`.
+
 ## [2.7.0] - 2026-09-09
 
 ### Added

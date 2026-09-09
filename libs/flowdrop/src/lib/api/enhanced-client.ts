@@ -33,19 +33,95 @@ export class ApiError extends Error {
   public readonly errorData: Record<string, unknown>;
   /** Operation that was being performed */
   public readonly operation: string;
+  /**
+   * The reasons behind `message`, one per line, already human-readable.
+   * For a fddo validation refusal these are the `details[].message` strings;
+   * empty when the server gave only a headline.
+   */
+  public readonly details: readonly string[];
 
   constructor(
     message: string,
     status: number,
     operation: string,
-    errorData: Record<string, unknown> = {}
+    errorData: Record<string, unknown> = {},
+    details: readonly string[] = []
   ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.operation = operation;
     this.errorData = errorData;
+    this.details = details;
   }
+}
+
+/**
+ * The reasons an error carries, or none. An `ApiError` contributes its
+ * `details`; a plain `Error` or a string has nothing to add. Duck-typed rather
+ * than `instanceof` because the error may come from a host page that bundled
+ * its own copy of this client.
+ */
+export function errorDetails(error: unknown): readonly string[] {
+  if (!error || typeof error !== 'object') return [];
+  const details = (error as { details?: unknown }).details;
+  return Array.isArray(details) ? details.filter((d): d is string => typeof d === 'string') : [];
+}
+
+/**
+ * Splits a non-2xx API body into a headline and its reasons.
+ *
+ * fddo answers a refusal as `{ success: false, error, error_code?, details? }`.
+ * `error` is the headline ("Workflow validation failed"); what the user can
+ * act on lives in `details` — for a validation failure an array of
+ * `{ code, message, locator }`. The exception subscriber's envelope carries
+ * the headline in `error` and the reason in `message`. Both are kept as
+ * structure (headline + list) so the toast can render a list instead of a
+ * semicolon-joined paragraph; the raw body still travels on `errorData`.
+ */
+export function parseApiErrorBody(
+  errorData: unknown,
+  status: number,
+  statusText: string
+): { message: string; details: string[] } {
+  const fallback = `HTTP ${status}: ${statusText}`;
+  if (!errorData || typeof errorData !== 'object') return { message: fallback, details: [] };
+  const body = errorData as { error?: unknown; message?: unknown; details?: unknown };
+  const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
+
+  const message = str(body.error) ?? str(body.message) ?? fallback;
+  const details: string[] = [];
+
+  const reason = str(body.message);
+  if (reason && reason !== message) details.push(reason);
+
+  if (Array.isArray(body.details)) {
+    for (const detail of body.details) {
+      const text =
+        str(detail) ??
+        (detail && typeof detail === 'object'
+          ? str((detail as { message?: unknown }).message)
+          : null);
+      if (text) details.push(text);
+    }
+  }
+
+  return { message, details };
+}
+
+/**
+ * Whether a failed attempt is worth repeating.
+ *
+ * Only failures the next attempt could plausibly not repeat: a network failure
+ * (`fetch` rejects with a `TypeError`), 408 Request Timeout, 429 Too Many
+ * Requests, and 5xx. Every other 4xx is a refusal — the server read the request
+ * and said no — and the same bytes will get the same answer. A 2xx whose body
+ * is not JSON (`SyntaxError` from `response.json()`) is not retried either:
+ * the same proxy will serve the same login page three times.
+ */
+function isRetryable(error: Error): boolean {
+  if (!(error instanceof ApiError)) return error instanceof TypeError;
+  return error.status === 408 || error.status === 429 || error.status >= 500;
 }
 
 /**
@@ -156,6 +232,17 @@ export class EnhancedFlowDropApiClient {
       ? (userApiSettings.retryAttempts ?? this.config.retry?.maxAttempts ?? 3)
       : 1;
 
+    /**
+     * The `ApiError` for a non-2xx response, body read and split into headline
+     * and reasons. `statusText` is only the last-resort headline: a fddo 403
+     * says which permission is missing, and that must reach the user.
+     */
+    const refusal = async (response: Response, status: number, statusText: string) => {
+      const errorData: Record<string, unknown> = await response.json().catch(() => ({}));
+      const { message, details } = parseApiErrorBody(errorData, status, statusText);
+      return new ApiError(message, status, operation, errorData, details);
+    };
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         const response = await fetch(url, fetchConfig);
@@ -176,7 +263,7 @@ export class EnhancedFlowDropApiClient {
               continue; // Retry with new headers
             }
           }
-          throw new ApiError('Unauthorized', 401, operation, {});
+          throw await refusal(response, 401, 'Unauthorized');
         }
 
         // Handle 403 Forbidden
@@ -184,18 +271,12 @@ export class EnhancedFlowDropApiClient {
           if (this.authProvider.onForbidden) {
             await this.authProvider.onForbidden();
           }
-          throw new ApiError('Forbidden', 403, operation, {});
+          throw await refusal(response, 403, 'Forbidden');
         }
 
         // Handle other errors
         if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new ApiError(
-            errorData.error ?? `HTTP ${response.status}: ${response.statusText}`,
-            response.status,
-            operation,
-            errorData
-          );
+          throw await refusal(response, response.status, response.statusText);
         }
 
         const data = await response.json();
@@ -221,12 +302,7 @@ export class EnhancedFlowDropApiClient {
           lastError = error instanceof Error ? error : new Error(String(error));
         }
 
-        // Don't retry on auth errors (401, 403) or last attempt
-        if (
-          (lastError instanceof ApiError &&
-            (lastError.status === 401 || lastError.status === 403)) ||
-          attempt === maxAttempts
-        ) {
+        if (!isRetryable(lastError) || attempt === maxAttempts) {
           logger.error(`API request failed after ${attempt} attempts:`, lastError);
           throw lastError;
         }

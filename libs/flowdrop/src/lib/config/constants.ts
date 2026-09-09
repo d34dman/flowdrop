@@ -36,11 +36,15 @@ export const EDGE_MARKER_SIZES = {
   data: { width: 16, height: 16 }
 } as const;
 
-/** Toast notification durations in milliseconds */
+/**
+ * How long each kind of toast stays, in milliseconds. `Infinity` means it
+ * stays until the user closes it: errors and warnings name something to act
+ * on, and a message that vanishes mid-read was never delivered.
+ */
 export const TOAST_DURATION = {
   SUCCESS: 4_000,
-  ERROR: 6_000,
-  WARNING: 5_000,
+  ERROR: Infinity,
+  WARNING: Infinity,
   INFO: 4_000,
   CONFIRMATION: 5_000
 } as const;

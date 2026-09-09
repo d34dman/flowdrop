@@ -220,7 +220,12 @@ export type {
 // API Clients
 // ============================================================================
 
-export { EnhancedFlowDropApiClient, ApiError } from '../api/enhanced-client.js';
+export {
+  EnhancedFlowDropApiClient,
+  ApiError,
+  parseApiErrorBody,
+  errorDetails
+} from '../api/enhanced-client.js';
 
 // ============================================================================
 // Connection Utilities

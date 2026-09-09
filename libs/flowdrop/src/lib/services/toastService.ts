@@ -4,8 +4,24 @@
  * Provides consistent toast notifications across the FlowDrop application
  */
 
-import { toast, type DefaultToastOptions } from 'svelte-5-french-toast';
+import { toast, type DefaultToastOptions, type Renderable } from 'svelte-5-french-toast';
 import { TOAST_DURATION } from '../config/constants.js';
+import { errorDetails } from '../api/enhanced-client.js';
+import DismissibleToast from '../components/toast/DismissibleToast.svelte';
+import WarningIcon from '../components/toast/WarningIcon.svelte';
+
+/**
+ * TYPE DEBT — remove when svelte-5-french-toast types `Renderable` as
+ * Svelte 5's `Component` instead of the legacy `SvelteComponent` class
+ * (dist/core/types.d.ts). The runtime renders a Svelte 5 component fine;
+ * only the declaration is behind, so this is the one place the lie lives.
+ */
+const asRenderable = <P extends Record<string, unknown>>(component: unknown) =>
+  component as Renderable<P>;
+const dismissibleToast = asRenderable<{ text: string; details?: readonly string[] }>(
+  DismissibleToast
+);
+const warningIcon = asRenderable(WarningIcon);
 
 /**
  * Default toast options themed with FlowDrop design tokens.
@@ -48,6 +64,17 @@ export type ToastType = 'success' | 'error' | 'warning' | 'info' | 'loading';
  */
 export interface ToastOptions {
   duration?: number;
+  /**
+   * Reasons behind the message, rendered as a list under it (errors and
+   * warnings only). Pass `ApiError.details` here.
+   */
+  details?: readonly string[];
+  /**
+   * Stable id: a toast with the same id replaces the one already showing
+   * instead of stacking. Errors and warnings default to an id derived from
+   * their text, so repeating a failing action does not wallpaper the screen.
+   */
+  id?: string;
   position?:
     | 'top-left'
     | 'top-center'
@@ -57,33 +84,57 @@ export interface ToastOptions {
     | 'bottom-right';
 }
 
+/** Default id for a persistent toast: one per distinct text. */
+function dedupeId(kind: string, message: string, details: readonly string[] = []): string {
+  return `${kind}:${[message, ...details].join('\n')}`;
+}
+
 /**
  * Show a success toast notification
  */
 export function showSuccess(message: string, options?: ToastOptions): string {
   return toast.success(message, {
-    duration: options?.duration || TOAST_DURATION.SUCCESS,
-    position: options?.position || 'bottom-center'
+    id: options?.id,
+    duration: options?.duration ?? TOAST_DURATION.SUCCESS,
+    position: options?.position ?? 'bottom-center'
   });
 }
 
 /**
- * Show an error toast notification
+ * Show an error toast notification.
+ *
+ * Stays until the user closes it (TOAST_DURATION.ERROR is Infinity). Pass a
+ * finite `duration` to opt back into auto-dismiss.
  */
 export function showError(message: string, options?: ToastOptions): string {
-  return toast.error(message, {
-    duration: options?.duration || TOAST_DURATION.ERROR,
-    position: options?.position || 'bottom-center'
+  const details = options?.details ?? [];
+  return toast.error(dismissibleToast, {
+    id: options?.id ?? dedupeId('error', message, details),
+    props: { text: message, details },
+    duration: options?.duration ?? TOAST_DURATION.ERROR,
+    position: options?.position ?? 'bottom-center'
   });
 }
 
 /**
- * Show a warning toast notification
+ * Show a warning toast notification.
+ *
+ * Persists until dismissed, like an error. The stance behind that: a warning
+ * here is not "done, by the way" — the editor reserves it for something the
+ * user should act on (an agent's config key that was ignored, an import that
+ * dropped nodes), and a message like that must not vanish mid-read. Pass a
+ * finite `duration` for a warning that is only informational. Wears its own
+ * icon and colour so it is not mistaken for an error.
  */
 export function showWarning(message: string, options?: ToastOptions): string {
-  return toast.error(message, {
-    duration: options?.duration || TOAST_DURATION.WARNING,
-    position: options?.position || 'bottom-center'
+  const details = options?.details ?? [];
+  return toast(dismissibleToast, {
+    id: options?.id ?? dedupeId('warning', message, details),
+    props: { text: message, details },
+    icon: warningIcon,
+    className: 'flowdrop-toast-bar flowdrop-toast-bar--warning',
+    duration: options?.duration ?? TOAST_DURATION.WARNING,
+    position: options?.position ?? 'bottom-center'
   });
 }
 
@@ -92,8 +143,9 @@ export function showWarning(message: string, options?: ToastOptions): string {
  */
 export function showInfo(message: string, options?: ToastOptions): string {
   return toast.success(message, {
-    duration: options?.duration || TOAST_DURATION.INFO,
-    position: options?.position || 'bottom-center'
+    id: options?.id,
+    duration: options?.duration ?? TOAST_DURATION.INFO,
+    position: options?.position ?? 'bottom-center'
   });
 }
 
@@ -102,8 +154,9 @@ export function showInfo(message: string, options?: ToastOptions): string {
  */
 export function showLoading(message: string, options?: ToastOptions): string {
   return toast.loading(message, {
-    duration: options?.duration || Infinity,
-    position: options?.position || 'bottom-center'
+    id: options?.id,
+    duration: options?.duration ?? Infinity,
+    position: options?.position ?? 'bottom-center'
   });
 }
 
@@ -151,9 +204,16 @@ export function showPromise<T>(
  */
 export function showConfirmation(message: string, options?: ToastOptions): string {
   return toast(message, {
-    duration: options?.duration || TOAST_DURATION.CONFIRMATION,
-    position: options?.position || 'bottom-center'
+    id: options?.id,
+    duration: options?.duration ?? TOAST_DURATION.CONFIRMATION,
+    position: options?.position ?? 'bottom-center'
   });
+}
+
+/** Headline and reasons of a thrown error; see `errorDetails`. */
+function errorParts(error: string | Error): { message: string; details: readonly string[] } {
+  if (typeof error === 'string') return { message: error, details: [] };
+  return { message: error.message, details: errorDetails(error) };
 }
 
 /**
@@ -172,8 +232,8 @@ export const apiToasts = {
    * Show API error message
    */
   error: (operation: string, error: string | Error) => {
-    const errorMessage = error instanceof Error ? error.message : error;
-    return showError(`${operation} failed: ${errorMessage}`);
+    const { message, details } = errorParts(error);
+    return showError(`${operation} failed: ${message}`, { details });
   },
 
   /**
@@ -220,8 +280,8 @@ export const workflowToasts = {
    * Show workflow save error
    */
   saveError: (error: string | Error) => {
-    const errorMessage = error instanceof Error ? error.message : error;
-    return showError(`Failed to save workflow: ${errorMessage}`);
+    const { message, details } = errorParts(error);
+    return showError(`Failed to save workflow: ${message}`, { details });
   },
 
   /**
@@ -238,8 +298,8 @@ export const workflowToasts = {
    * Show workflow delete error
    */
   deleteError: (error: string | Error) => {
-    const errorMessage = error instanceof Error ? error.message : error;
-    return showError(`Failed to delete workflow: ${errorMessage}`);
+    const { message, details } = errorParts(error);
+    return showError(`Failed to delete workflow: ${message}`, { details });
   },
 
   /**
@@ -276,8 +336,8 @@ export const workflowToasts = {
    * Show workflow execution error
    */
   executionError: (error: string | Error) => {
-    const errorMessage = error instanceof Error ? error.message : error;
-    return showError(`Workflow execution failed: ${errorMessage}`);
+    const { message, details } = errorParts(error);
+    return showError(`Workflow execution failed: ${message}`, { details });
   }
 };
 
@@ -299,8 +359,8 @@ export const pipelineToasts = {
    * Show pipeline creation error
    */
   creationError: (error: string | Error) => {
-    const errorMessage = error instanceof Error ? error.message : error;
-    return showError(`Failed to create pipeline: ${errorMessage}`);
+    const { message, details } = errorParts(error);
+    return showError(`Failed to create pipeline: ${message}`, { details });
   },
 
   /**
@@ -321,8 +381,8 @@ export const pipelineToasts = {
    * Show pipeline execution error
    */
   executionError: (pipelineId: string, error: string | Error) => {
-    const errorMessage = error instanceof Error ? error.message : error;
-    return showError(`Pipeline ${pipelineId} execution failed: ${errorMessage}`);
+    const { message, details } = errorParts(error);
+    return showError(`Pipeline ${pipelineId} execution failed: ${message}`, { details });
   },
 
   /**

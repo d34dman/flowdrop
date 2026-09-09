@@ -861,7 +861,7 @@
         const errorObj = error instanceof Error ? error : new Error('Unknown error occurred');
         logger.error('Workflow import failed:', errorObj);
         if (features.showToasts) {
-          apiToasts.error('Import workflow', errorObj.message);
+          apiToasts.error('Import workflow', errorObj);
         }
       }
     };

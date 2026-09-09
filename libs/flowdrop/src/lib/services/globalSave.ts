@@ -269,7 +269,9 @@ export async function globalSaveWorkflow(options: GlobalSaveOptions = {}): Promi
     }
 
     if (features.showToasts && !suppressToast) {
-      apiToasts.error('Save workflow', errorObj.message);
+      // The error object, not its message: an ApiError carries the server's
+      // reasons as `details`, and the toast renders them as a list.
+      apiToasts.error('Save workflow', errorObj);
     }
 
     throw error;

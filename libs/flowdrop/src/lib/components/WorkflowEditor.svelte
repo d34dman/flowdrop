@@ -718,7 +718,7 @@
       } catch (error) {
         const errorObj = error instanceof Error ? error : new Error('Unknown error occurred');
         logger.error('Workflow file drop import failed:', errorObj);
-        apiToasts.error('Import workflow', errorObj.message);
+        apiToasts.error('Import workflow', errorObj);
       }
     };
     reader.onerror = () => {

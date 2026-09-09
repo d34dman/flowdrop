@@ -18,6 +18,7 @@ import { createStoreCommandContext } from '../commands/storeIntegration.svelte.j
 import { isLayoutCommand, isMutatingCommand, isViewCommand } from '../chat/commandClassifier.js';
 import { getBehaviorSettings } from '../stores/settingsStore.svelte.js';
 import { logger } from '../utils/logger.js';
+import { errorDetails } from '../api/enhanced-client.js';
 import { buildToolDescriptors } from './descriptors.js';
 import { validateToolArgs } from './validate.js';
 import { createApprovalGate, GateBusyError } from './gate.js';
@@ -138,6 +139,17 @@ function isConflictError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const e = err as { status?: unknown; errorData?: { error_code?: unknown } };
   return e.errorData?.error_code === 'CONFLICT' || e.status === 409;
+}
+
+/**
+ * The error as one line of text for an agent. An `ApiError` keeps the
+ * server's reasons apart from its headline (`details`); a text channel has
+ * no list to render them in, so they are joined back on here.
+ */
+function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const reasons = errorDetails(err);
+  return reasons.length ? `${err.message}: ${reasons.join('; ')}` : err.message;
 }
 
 function stripResult(result: CommandResult): Record<string, unknown> {
@@ -380,7 +392,7 @@ export function attachWebMCP(
     try {
       envelope = await onSave();
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = describeError(err);
       if (!isConflictError(err)) return errorResult('SAVE_FAILED', message);
       // The server's own wording usually already says to reload; add the hint
       // only when it does not, so the agent is not told twice.
