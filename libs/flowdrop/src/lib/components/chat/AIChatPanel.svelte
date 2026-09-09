@@ -24,7 +24,7 @@
   import MarkdownDisplay from '../MarkdownDisplay.svelte';
   import { onDestroy, tick } from 'svelte';
   import Icon from '@iconify/svelte';
-  import { m } from '$lib/messages/index.js';
+  import { getMessages, m } from '$lib/messages/index.js';
 
   // =========================================================================
   // Internal Display Message Type
@@ -71,6 +71,10 @@
   let { nodeTypes, workflowId, onUIAction, endpointConfig }: Props = $props();
 
   const fd = getInstance();
+
+  // The messages getter, read once at init: the tool runtime's dialog mounts
+  // outside this component tree and must not touch Svelte context at call time.
+  const messages = getMessages();
 
   // Hoist the chat branch — read in placeholder, header, three welcome states,
   // auto-retry banner, and the send button aria-label.
@@ -195,7 +199,12 @@
       onUIAction,
       hooks: fd.host.current,
       approval: 'confirm',
-      messages: () => m()
+      // The dialog is the WebMCP gate's; only its title changes hands — it is
+      // the assistant asking, not an unknown agent on the page.
+      messages: () => {
+        const all = messages();
+        return { ...all, webmcp: { ...all.webmcp, confirmTitle: all.chat.tools.confirmTitle } };
+      }
     });
     return runtime;
   }
@@ -224,7 +233,7 @@
     if (preview && preview.commands.length > 0) {
       const { describeCommand, summarizeCommands } = await import('../../webmcp/index.js');
       if (preview.commands.length === 1) return describeCommand(preview.commands[0]);
-      return summarizeCommands(preview.commands, m().webmcp) ?? '';
+      return summarizeCommands(preview.commands, messages().webmcp) ?? '';
     }
     return outcome.message ?? '';
   }
@@ -253,12 +262,12 @@
         const line = lastLine(msg);
         if (line) {
           line.status = 'ok';
-          line.text = tt.applied({
-            tool: event.call.name,
-            detail: event.preview?.mutating
-              ? await appliedDetail(event.preview, event.outcome)
-              : argsDetail(event.call.args)
-          });
+          line.text = event.preview?.mutating
+            ? tt.applied({
+                tool: event.call.name,
+                detail: await appliedDetail(event.preview, event.outcome)
+              })
+            : tt.read({ tool: event.call.name, detail: argsDetail(event.call.args) });
         }
         break;
       }

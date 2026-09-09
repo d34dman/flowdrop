@@ -279,6 +279,11 @@ export const defaultMessages = {
       reading: ({ tool, detail }: { tool: string; detail: string }) =>
         detail ? `Reading: ${tool} ${detail}` : `Reading: ${tool}`,
       awaitingApproval: ({ tool }: { tool: string }) => `Waiting for your approval: ${tool}`,
+      /** Title of the approval dialog when the assistant, not a browser agent, asks. */
+      confirmTitle: ({ name }: { name: string }) => `The assistant wants to change “${name}”`,
+      /** A read that completed: `Read: describe_type http_request`. */
+      read: ({ tool, detail }: { tool: string; detail: string }) =>
+        detail ? `Read: ${tool} ${detail}` : `Read: ${tool}`,
       applied: ({ tool, detail }: { tool: string; detail: string }) =>
         detail ? `Applied: ${detail}` : `Done: ${tool}`,
       rejected: ({ tool }: { tool: string }) => `You rejected: ${tool}`,
