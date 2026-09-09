@@ -40,6 +40,10 @@ export {
   VIEW_COMMAND_TYPES
 } from './commandClassifier.js';
 export { buildApiHistory, type ChatLogEntry } from './historyBuilder.js';
+export { toToolDefinitions, catalogueBytes } from './toolCatalogue.js';
+export type { ToolCatalogueSource } from './toolCatalogue.js';
+export { runTurn, parseOutcome, toolResultText } from './turnDriver.js';
+export type { TurnDriverDeps, TurnEvent, TurnOutcome, ToolOutcome } from './turnDriver.js';
 
 // ============================================================================
 // Chat Types
@@ -52,5 +56,11 @@ export type {
   ChatResponse,
   ExtractedCommands,
   CommandExecutionStatus,
-  CommandPreviewItem
+  CommandPreviewItem,
+  ChatToolDefinition,
+  ChatToolCall,
+  ChatToolResult,
+  ChatToolResultsRequest,
+  ChatTurnRequest,
+  ChatTurnResponse
 } from '../types/chat.js';

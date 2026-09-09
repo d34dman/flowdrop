@@ -128,7 +128,24 @@ export interface BehaviorSettings {
   undoHistoryLimit: number;
   /** Show confirmation dialog before deleting nodes */
   confirmDelete: boolean;
-  /** Automatically re-submit batch failures to the AI for self-correction */
+  /**
+   * How the AI assistant works with the editor.
+   *
+   * - `'tools'` (default): the assistant calls the editor's tools — the same
+   *   `describe_type`, `batch`, `save`, `run`, … a WebMCP browser agent gets —
+   *   in a loop inside one message; reads run at once, document changes ask
+   *   once per round in the approval dialog. Needs a backend with the
+   *   `chat.toolResults` endpoint; without one the panel falls back to `'dsl'`
+   *   for the session and says so.
+   * - `'dsl'`: the legacy text mode — one reply holding a ```flowdrop block,
+   *   previewed and applied on click. Deprecated; kept for one minor.
+   */
+  chatMode: 'tools' | 'dsl';
+  /**
+   * Automatically re-submit batch failures to the AI for self-correction.
+   * Legacy `'dsl'` mode only: in `'tools'` mode the tool result itself tells
+   * the assistant what went wrong, in the same turn.
+   */
   chatAutoRetry: boolean;
   /**
    * Allow the AI assistant's commands to reposition nodes
@@ -262,6 +279,7 @@ export const DEFAULT_BEHAVIOR_SETTINGS: BehaviorSettings = {
   storeDraftsInBrowser: true,
   undoHistoryLimit: 50,
   confirmDelete: false,
+  chatMode: 'tools',
   chatAutoRetry: true,
   chatAllowLayoutChanges: true
 };

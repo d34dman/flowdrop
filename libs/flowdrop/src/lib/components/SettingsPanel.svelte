@@ -268,6 +268,19 @@
           description: 'Show confirmation before deleting nodes',
           default: true
         },
+        chatMode: {
+          type: 'string',
+          title: 'AI Assistant Mode',
+          description:
+            'Tools: the assistant calls the editor tools in a loop and asks before changing the workflow. ' +
+            'Text (legacy): one reply with a command block you apply by hand. ' +
+            'Tools needs a backend that supports tool-calling turns; otherwise the panel falls back to Text.',
+          oneOf: [
+            { const: 'tools', title: 'Tools' },
+            { const: 'dsl', title: 'Text (legacy)' }
+          ],
+          default: 'tools'
+        },
         chatAutoRetry: {
           type: 'boolean',
           title: 'AI Assistant Auto-retry',

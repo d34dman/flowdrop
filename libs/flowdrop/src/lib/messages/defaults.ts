@@ -273,6 +273,22 @@ export const defaultMessages = {
     send: 'Send message',
     autoRetry: ({ attempt, max }: { attempt: number; max: number }) =>
       `Auto-retrying (attempt ${attempt}/${max})…`,
+    // Tool-calling turns (tools mode).
+    tools: {
+      /** Status line while a read tool runs: `Reading: describe_type http_request`. */
+      reading: ({ tool, detail }: { tool: string; detail: string }) =>
+        detail ? `Reading: ${tool} ${detail}` : `Reading: ${tool}`,
+      awaitingApproval: ({ tool }: { tool: string }) => `Waiting for your approval: ${tool}`,
+      applied: ({ tool, detail }: { tool: string; detail: string }) =>
+        detail ? `Applied: ${detail}` : `Done: ${tool}`,
+      rejected: ({ tool }: { tool: string }) => `You rejected: ${tool}`,
+      failed: ({ tool, error }: { tool: string; error: string }) => `${tool} failed: ${error}`,
+      rounds: ({ count }: { count: number }) =>
+        `${count} ${count === 1 ? 'tool round' : 'tool rounds'}`,
+      legacyFallback:
+        'This backend does not support tool-calling turns; using the text mode for this session.',
+      aborted: ({ reason }: { reason: string }) => `Stopped: ${reason}`
+    },
     // CommandPreview labels.
     commandPreview: {
       ariaLabel: 'Command preview',

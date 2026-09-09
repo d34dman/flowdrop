@@ -17,9 +17,12 @@
     type BatchOutcome,
     type ParseFailure
   } from '../../chat/batchFeedback.js';
+  import { toToolDefinitions } from '../../chat/toolCatalogue.js';
+  import { runTurn, type TurnEvent } from '../../chat/turnDriver.js';
+  import type { ToolPreview, ToolRuntime } from '../../webmcp/types.js';
   import CommandPreview from './CommandPreview.svelte';
   import MarkdownDisplay from '../MarkdownDisplay.svelte';
-  import { tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import Icon from '@iconify/svelte';
   import { m } from '$lib/messages/index.js';
 
@@ -44,6 +47,18 @@
     readOnlyResults?: string[];
     /** Set when the user dismissed this message's command preview */
     commandsDismissed?: boolean;
+    /** Tools mode: one compact status line per tool call of this turn */
+    toolLines?: ToolLine[];
+    /** Tools mode: set while the turn is still running */
+    inProgress?: boolean;
+    /** Tools mode: a muted notice (legacy fallback, abort) rather than a reply */
+    notice?: boolean;
+  }
+
+  /** One tool call as the transcript shows it: what ran and how it ended. */
+  interface ToolLine {
+    status: 'running' | 'ok' | 'rejected' | 'failed';
+    text: string;
   }
 
   interface Props {
@@ -73,6 +88,31 @@
   let inputElement: HTMLTextAreaElement | undefined = $state();
   let messagesElement: HTMLDivElement | undefined = $state();
   let autoRetryCount = 0;
+
+  // ---- tools mode -----------------------------------------------------------
+
+  /**
+   * Set once the first response of the session came from a server without
+   * tool-calling turns (no `turnId`). The session then stays in the text mode;
+   * a reload tries tools again.
+   */
+  let legacyFallback: boolean = $state(false);
+  let runtime: ToolRuntime | null = null;
+
+  /**
+   * Whether this turn drives tools. The setting asks for it, the backend
+   * declares the tool-results door, and no earlier reply proved it legacy.
+   */
+  const toolsMode = $derived(
+    getBehaviorSettings().chatMode === 'tools' &&
+      chatService.supportsToolTurns(endpointConfig ?? null) &&
+      !legacyFallback
+  );
+
+  onDestroy(() => {
+    runtime?.dispose();
+    runtime = null;
+  });
 
   // =========================================================================
   // Derived State
@@ -134,6 +174,182 @@
 
   function getCommandContext() {
     return createStoreCommandContext(nodeTypes, onUIAction, fd);
+  }
+
+  // =========================================================================
+  // Tools mode
+  // =========================================================================
+
+  /**
+   * The tool runtime for this panel: the same `runTool()` the WebMCP
+   * registration uses, with this editor's host hooks (`fd.host`) behind
+   * `save` / `run` / `run_status` and the built-in confirm dialog as its gate.
+   * Loaded on demand so the adapter stays out of the editor's static graph.
+   */
+  async function ensureRuntime(): Promise<ToolRuntime> {
+    if (runtime && !runtime.disposed) return runtime;
+    const { createToolRuntime } = await import('../../webmcp/index.js');
+    runtime = createToolRuntime({
+      instance: fd,
+      nodeTypes: () => nodeTypes,
+      onUIAction,
+      hooks: fd.host.current,
+      approval: 'confirm',
+      messages: () => m()
+    });
+    return runtime;
+  }
+
+  /** Primitive argument values of a call, for a status line: `describe_type http_request`. */
+  function argsDetail(args: Record<string, unknown>): string {
+    const parts: string[] = [];
+    for (const value of Object.values(args)) {
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        parts.push(String(value));
+      }
+    }
+    const text = parts.join(' ');
+    return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+  }
+
+  /**
+   * What a call changed, for the transcript, in the dialog's own words: the
+   * batch summary for several commands, the one-line description for one,
+   * the host's message for `save` / `run` / `run_status`.
+   */
+  async function appliedDetail(
+    preview: ToolPreview | null,
+    outcome: { message?: string }
+  ): Promise<string> {
+    if (preview && preview.commands.length > 0) {
+      const { describeCommand, summarizeCommands } = await import('../../webmcp/index.js');
+      if (preview.commands.length === 1) return describeCommand(preview.commands[0]);
+      return summarizeCommands(preview.commands, m().webmcp) ?? '';
+    }
+    return outcome.message ?? '';
+  }
+
+  function lastLine(msg: DisplayMessage): ToolLine | undefined {
+    return msg.toolLines?.[msg.toolLines.length - 1];
+  }
+
+  /** Render a driver event onto the in-progress assistant message. */
+  async function renderEvent(msg: DisplayMessage, event: TurnEvent): Promise<void> {
+    const tt = t.tools;
+    switch (event.type) {
+      case 'reading':
+        msg.toolLines?.push({
+          status: 'running',
+          text: tt.reading({ tool: event.call.name, detail: argsDetail(event.call.args) })
+        });
+        break;
+      case 'awaiting-approval':
+        msg.toolLines?.push({
+          status: 'running',
+          text: tt.awaitingApproval({ tool: event.call.name })
+        });
+        break;
+      case 'applied': {
+        const line = lastLine(msg);
+        if (line) {
+          line.status = 'ok';
+          line.text = tt.applied({
+            tool: event.call.name,
+            detail: event.preview?.mutating
+              ? await appliedDetail(event.preview, event.outcome)
+              : argsDetail(event.call.args)
+          });
+        }
+        break;
+      }
+      case 'rejected': {
+        const line = lastLine(msg);
+        if (line) {
+          line.status = 'rejected';
+          line.text = tt.rejected({ tool: event.call.name });
+        }
+        break;
+      }
+      case 'failed': {
+        const line = lastLine(msg);
+        if (line) {
+          line.status = 'failed';
+          line.text = tt.failed({
+            tool: event.call.name,
+            error: event.outcome.error ?? event.outcome.code ?? 'error'
+          });
+        }
+        break;
+      }
+      case 'round-complete':
+      case 'final':
+        break;
+    }
+  }
+
+  /** One user message as a tool-calling turn. */
+  async function sendToolTurn(text: string): Promise<void> {
+    displayMessages.push({ role: 'user', content: text });
+    isLoading = true;
+
+    const progress: DisplayMessage = {
+      role: 'assistant',
+      content: '',
+      toolLines: [],
+      inProgress: true
+    };
+    displayMessages.push(progress);
+    // The pushed object is proxied by the state array; mutate the proxy.
+    const msg = displayMessages[displayMessages.length - 1];
+
+    try {
+      const rt = await ensureRuntime();
+      const history = getHistory();
+      const outcome = await runTurn(
+        {
+          message: text,
+          workflowState: getWorkflowState(),
+          history: history.slice(0, -2), // all except this message and the placeholder
+          tools: toToolDefinitions(rt)
+        },
+        {
+          send: (request) =>
+            chatService.sendMessage(fd.api.config, workflowId ?? '', request, fd.api.authProvider),
+          sendToolResults: (turnId, request) =>
+            chatService.sendToolResults(
+              fd.api.config,
+              workflowId ?? '',
+              turnId,
+              request,
+              fd.api.authProvider
+            ),
+          runTool: (name, input) => rt.runTool(name, input),
+          preview: (name, input) => rt.preview(name, input),
+          onEvent: (event) => void renderEvent(msg, event)
+        }
+      );
+
+      if (outcome.kind === 'legacy') {
+        // An older server: keep its reply, and stay in the text mode from now on.
+        legacyFallback = true;
+        displayMessages.splice(displayMessages.length - 1, 1);
+        displayMessages.push({ role: 'assistant', content: t.tools.legacyFallback, notice: true });
+        displayMessages.push(processResponse(outcome.content));
+        return;
+      }
+      if (outcome.kind === 'aborted') {
+        msg.content = t.tools.aborted({ reason: outcome.reason });
+      } else {
+        msg.content = outcome.content;
+      }
+      if ((msg.toolLines?.length ?? 0) === 0) msg.toolLines = undefined;
+    } catch (err) {
+      msg.content = `Error: ${err instanceof Error ? err.message : 'Failed to send message'}`;
+    } finally {
+      msg.inProgress = false;
+      isLoading = false;
+      tick().then(() => inputElement?.focus());
+    }
   }
 
   // =========================================================================
@@ -430,7 +646,11 @@
     if (!text || isLoading || !workflowId) return;
     inputValue = '';
     autoRetryCount = 0;
-    await sendMessageInternal(text);
+    if (toolsMode) {
+      await sendToolTurn(text);
+    } else {
+      await sendMessageInternal(text);
+    }
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -475,9 +695,43 @@
             <span>{t.autoRetry({ attempt: message.retryAttempt, max: MAX_AUTO_RETRIES })}</span>
           </div>
         {:else}
-          <div class="ai-chat-panel__bubble ai-chat-panel__bubble--{message.role}">
+          <div
+            class="ai-chat-panel__bubble ai-chat-panel__bubble--{message.role}"
+            class:ai-chat-panel__bubble--notice={message.notice}
+          >
+            {#if message.toolLines && message.toolLines.length > 0}
+              <ul
+                class="ai-chat-panel__tool-lines"
+                aria-label={t.tools.rounds({ count: message.toolLines.length })}
+              >
+                {#each message.toolLines as line, i (i)}
+                  <li class="ai-chat-panel__tool-line ai-chat-panel__tool-line--{line.status}">
+                    {#if line.status === 'running'}
+                      <Icon icon="mdi:loading" class="ai-chat-panel__tool-line-spin" />
+                    {:else if line.status === 'ok'}
+                      <Icon icon="mdi:check" />
+                    {:else if line.status === 'rejected'}
+                      <Icon icon="mdi:cancel" />
+                    {:else}
+                      <Icon icon="mdi:alert-circle-outline" />
+                    {/if}
+                    <span>{line.text}</span>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
             {#if message.role === 'user'}
               <div class="ai-chat-panel__bubble-content">{message.content}</div>
+            {:else if message.inProgress && !message.content}
+              <div class="ai-chat-panel__thinking">
+                <span class="ai-chat-panel__dot"></span>
+                <span class="ai-chat-panel__dot"></span>
+                <span class="ai-chat-panel__dot"></span>
+              </div>
+            {:else if message.notice}
+              <div class="ai-chat-panel__bubble-content ai-chat-panel__notice-text">
+                {message.content}
+              </div>
             {:else}
               <div class="ai-chat-panel__bubble-content">
                 <MarkdownDisplay content={message.content} />
@@ -502,7 +756,7 @@
           </div>
         {/if}
       {/each}
-      {#if isLoading}
+      {#if isLoading && !displayMessages[displayMessages.length - 1]?.inProgress}
         <div class="ai-chat-panel__bubble ai-chat-panel__bubble--assistant">
           <div class="ai-chat-panel__thinking">
             <span class="ai-chat-panel__dot"></span>
@@ -720,6 +974,57 @@
 
   .ai-chat-panel__bubble--assistant .ai-chat-panel__bubble-content :global(em) {
     font-style: italic;
+  }
+
+  /* Tools mode: one status line per tool call */
+  .ai-chat-panel__tool-lines {
+    list-style: none;
+    margin: 0 0 var(--fd-space-3xs);
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .ai-chat-panel__tool-line {
+    display: flex;
+    align-items: center;
+    gap: var(--fd-space-3xs);
+    font-size: var(--fd-text-xs);
+    color: var(--fd-muted-foreground);
+    line-height: 1.4;
+  }
+
+  .ai-chat-panel__tool-line :global(svg) {
+    flex-shrink: 0;
+    font-size: 0.9rem;
+  }
+
+  .ai-chat-panel__tool-line--ok :global(svg) {
+    color: var(--fd-success, var(--fd-primary));
+  }
+
+  .ai-chat-panel__tool-line--rejected,
+  .ai-chat-panel__tool-line--failed {
+    color: var(--fd-destructive, var(--fd-foreground));
+  }
+
+  .ai-chat-panel__tool-line :global(.ai-chat-panel__tool-line-spin) {
+    animation: spin 1s linear infinite;
+  }
+
+  /* Notices (legacy fallback, aborted turn) */
+  .ai-chat-panel__bubble--notice {
+    max-width: 100%;
+    align-self: center;
+  }
+
+  .ai-chat-panel__bubble--notice .ai-chat-panel__notice-text {
+    background: none;
+    color: var(--fd-muted-foreground);
+    font-size: var(--fd-text-xs);
+    text-align: center;
+    opacity: 0.8;
   }
 
   /* Read-only command results */

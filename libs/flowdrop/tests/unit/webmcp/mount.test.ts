@@ -103,6 +103,49 @@ describe('mountFlowDropApp({ webmcp })', () => {
     expect(runtime.tools.size).toBe(0);
   });
 
+  it('publishes the host hooks on the instance whether or not WebMCP is on', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network'));
+    vi.spyOn(window, 'fetch').mockRejectedValue(new Error('no network'));
+    vi.mocked(globalSaveModule.globalSaveWorkflow).mockClear();
+
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const onRun = vi.fn(async () => ({ ok: true, data: { runId: 'r1' } }));
+    const app = await mountFlowDropApp(el, {
+      workflow,
+      nodes: [textIn],
+      portConfig: DEFAULT_PORT_CONFIG,
+      categories: [],
+      // No WebMCP runtime on this page and the option is off — the chat panel
+      // still needs the same save the registration would get.
+      features: { showToasts: false, autoSaveDraft: false },
+      instanceId: `mount-host-${Math.random().toString(36).slice(2)}`
+    });
+    expect(app.webmcp).toBeUndefined();
+    const hooks = app.instance.host.current;
+    expect(typeof hooks.onSave).toBe('function');
+    expect(hooks.onRun).toBeUndefined();
+    await hooks.onSave?.();
+    expect(globalSaveModule.globalSaveWorkflow).toHaveBeenCalledTimes(1);
+    app.destroy();
+
+    // With a webmcp option carrying run hooks, the instance carries them too.
+    const el2 = document.createElement('div');
+    document.body.appendChild(el2);
+    const app2 = await mountFlowDropApp(el2, {
+      workflow,
+      nodes: [textIn],
+      portConfig: DEFAULT_PORT_CONFIG,
+      categories: [],
+      webmcp: { onRun },
+      features: { showToasts: false, autoSaveDraft: false },
+      instanceId: `mount-host2-${Math.random().toString(36).slice(2)}`
+    });
+    expect(app2.instance.host.current.onRun).toBe(onRun);
+    expect(typeof app2.instance.host.current.onSave).toBe('function');
+    app2.destroy();
+  });
+
   it("registers flowdrop_save and calling it invokes the mount's save path", async () => {
     const runtime = createFakeModelContext();
     Object.defineProperty(document, 'modelContext', { value: runtime, configurable: true });

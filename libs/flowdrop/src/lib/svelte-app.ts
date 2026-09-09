@@ -731,18 +731,29 @@ export async function mountFlowDropApp(
   // not wait for it — and detaches with the mount. Defaults `onSave` to the
   // mount's own Save so a browser agent's `save` tool persists exactly like
   // clicking Save does; a host that supplies its own `onSave` overrides it.
+  //
+  // The same hooks are published on the instance (`fd.host`) whether or not
+  // WebMCP is on: the chat panel's tool loop offers `save`, `run` and
+  // `run_status` through them, so the built-in assistant and a browser agent
+  // persist and run the same way.
+  const defaultOnSave: NonNullable<WebMCPMountOptions['onSave']> = async () =>
+    (await mountedApp.save())
+      ? undefined
+      : {
+          ok: false,
+          code: 'UNAVAILABLE',
+          message: 'Nothing was saved: the host cancelled the save or no workflow is loaded.'
+        };
+  const webmcpOptions: WebMCPMountOptions = {
+    onSave: defaultOnSave,
+    ...(webmcp === true || !webmcp ? {} : webmcp)
+  };
+  fd.host.set({
+    onSave: webmcpOptions.onSave,
+    onRun: webmcpOptions.onRun,
+    onRunStatus: webmcpOptions.onRunStatus
+  });
   if (webmcp) {
-    const webmcpOptions: WebMCPMountOptions = {
-      onSave: async () =>
-        (await mountedApp.save())
-          ? undefined
-          : {
-              ok: false,
-              code: 'UNAVAILABLE',
-              message: 'Nothing was saved: the host cancelled the save or no workflow is loaded.'
-            },
-      ...(webmcp === true ? {} : webmcp)
-    };
     void attachWebMCPToMount(fd, webmcpOptions, () => destroyed).then((handle) => {
       if (destroyed) handle?.detach();
       else webmcpHandle = handle;

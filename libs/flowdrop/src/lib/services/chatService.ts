@@ -7,7 +7,12 @@
  * @module services/chatService
  */
 
-import type { ChatRequest, ChatResponse, ChatHistoryMessage } from '../types/chat.js';
+import type {
+  ChatRequest,
+  ChatHistoryMessage,
+  ChatToolResultsRequest,
+  ChatTurnResponse
+} from '../types/chat.js';
 import type { EndpointConfig } from '../config/endpoints.js';
 import { buildEndpointUrl } from '../config/endpoints.js';
 import { authenticatedFetch } from '../utils/fetchWithAuth.js';
@@ -95,7 +100,12 @@ export class ChatService {
   // =========================================================================
 
   /**
-   * Send a message to the chat endpoint
+   * Send a message to the chat endpoint.
+   *
+   * With a {@link ChatTurnRequest} (a `tools` list) a tool-calling server
+   * answers a {@link ChatTurnResponse}; a legacy server ignores the list and
+   * answers a plain {@link ChatResponse} (no `turnId`). The return type is
+   * the union of the two so callers branch on `turnId`.
    *
    * @param workflowId - The workflow ID
    * @param request - The chat request payload
@@ -106,7 +116,7 @@ export class ChatService {
     workflowId: string,
     request: ChatRequest,
     authProvider?: AuthProvider
-  ): Promise<ChatResponse> {
+  ): Promise<ChatTurnResponse> {
     const config = this.getConfig(endpointConfig);
     const url = buildEndpointUrl(config, config.endpoints.chat.sendMessage, {
       id: workflowId
@@ -114,7 +124,49 @@ export class ChatService {
 
     logger.debug('[ChatService] Sending message to', url);
 
-    return this.request<ChatResponse>(
+    return this.request<ChatTurnResponse>(
+      config,
+      url,
+      {
+        method: 'POST',
+        body: JSON.stringify(request)
+      },
+      authProvider
+    );
+  }
+
+  /**
+   * Whether the configured backend has the tool-results door — the
+   * precondition for the panel's tools mode.
+   */
+  supportsToolTurns(endpointConfig: EndpointConfig | null): boolean {
+    return typeof endpointConfig?.endpoints?.chat?.toolResults === 'string';
+  }
+
+  /**
+   * Continue a tool-calling turn with the results of the calls the assistant
+   * made. The server runs the reasoner again and answers either more calls
+   * (`done: false`) or the final text (`done: true`).
+   *
+   * @throws Error when the backend has no `chat.toolResults` endpoint
+   */
+  async sendToolResults(
+    endpointConfig: EndpointConfig | null,
+    workflowId: string,
+    turnId: string,
+    request: ChatToolResultsRequest,
+    authProvider?: AuthProvider
+  ): Promise<ChatTurnResponse> {
+    const config = this.getConfig(endpointConfig);
+    const template = config.endpoints.chat.toolResults;
+    if (!template) {
+      throw new Error('This backend has no chat tool-results endpoint.');
+    }
+    const url = buildEndpointUrl(config, template, { id: workflowId, turnId });
+
+    logger.debug('[ChatService] Posting tool results to', url);
+
+    return this.request<ChatTurnResponse>(
       config,
       url,
       {

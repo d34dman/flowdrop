@@ -15,6 +15,7 @@
  */
 
 import type { NodeMetadata } from '../types/index.js';
+import type { HostHooks } from '../webmcp/types.js';
 import { HistoryService, historyService } from '../services/historyService.js';
 import { WorkflowStore } from './workflowStore.svelte.js';
 import { HistoryStore } from './historyStore.svelte.js';
@@ -91,6 +92,15 @@ export interface FlowDropInstance {
    */
   readonly nodeTypes: NodeTypesStore;
   /**
+   * The host's save/run/status hooks for this editor, as the mount supplied
+   * them (`mountFlowDropApp` sets `onSave` to its own Save and copies the
+   * `webmcp` option's `onRun`/`onRunStatus`). Read by anything that offers
+   * the `save`, `run` and `run_status` tools without a WebMCP runtime — the
+   * chat panel's tool loop — so both agents persist and run exactly the way
+   * clicking Save does.
+   */
+  readonly host: HostHooksStore;
+  /**
    * Run `fn` when this instance is destroyed. Returns an unsubscribe; calling
    * it before `destroy()` means `fn` never runs. Adapters that bind to an
    * instance (WebMCP, host integrations) hook their teardown here instead of
@@ -120,6 +130,27 @@ export class NodeTypesStore {
 
   set(list: NodeMetadata[]): void {
     this.#list = list;
+  }
+}
+
+/**
+ * The host hooks of one editor. A plain holder, not reactive: hooks are set
+ * once by the mount and read at call time.
+ */
+export class HostHooksStore {
+  #hooks: HostHooks = {};
+
+  get current(): HostHooks {
+    return this.#hooks;
+  }
+
+  /** Replace the hooks. Keys set to `undefined` are dropped. */
+  set(hooks: HostHooks): void {
+    const next: HostHooks = {};
+    if (hooks.onSave) next.onSave = hooks.onSave;
+    if (hooks.onRun) next.onRun = hooks.onRun;
+    if (hooks.onRunStatus) next.onRunStatus = hooks.onRunStatus;
+    this.#hooks = next;
   }
 }
 
@@ -199,6 +230,7 @@ export function createFlowDropInstance(options: CreateInstanceOptions = {}): Flo
     // The default instance keeps the legacy bare localStorage key.
     pipelinePanel: new PipelinePanelStore(id),
     nodeTypes: new NodeTypesStore(),
+    host: new HostHooksStore(),
     onDestroy(fn) {
       cleanups.push(fn);
       return () => {

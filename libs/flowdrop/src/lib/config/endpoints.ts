@@ -148,6 +148,13 @@ export interface EndpointConfig {
       getHistory: string;
       /** Clear conversation history */
       clearHistory: string;
+      /**
+       * Continue a tool-calling turn with the results of the tool calls the
+       * assistant made (`POST`, `{turnId}` in the path). Optional: a backend
+       * without it gets the legacy text mode — the panel sends one message,
+       * parses the ```flowdrop block in the reply, and asks before applying.
+       */
+      toolResults?: string;
     };
 
     // Template endpoints
@@ -292,7 +299,8 @@ export const defaultEndpointConfig: EndpointConfig = {
     chat: {
       sendMessage: '/workflows/{id}/chat/messages',
       getHistory: '/workflows/{id}/chat/messages',
-      clearHistory: '/workflows/{id}/chat/messages'
+      clearHistory: '/workflows/{id}/chat/messages',
+      toolResults: '/workflows/{id}/chat/turns/{turnId}/tool-results'
     },
     templates: {
       list: '/templates',
