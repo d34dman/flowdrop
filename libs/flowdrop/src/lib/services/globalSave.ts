@@ -131,7 +131,13 @@ async function flushPendingFormChanges(): Promise<void> {
  *  6. Call onMarkAsSaved / onAfterSave hooks
  *  7. Show toast notifications (respecting features.showToasts)
  */
-export async function globalSaveWorkflow(options: GlobalSaveOptions = {}): Promise<void> {
+/**
+ * Resolves `true` when the workflow was written, `false` when nothing was
+ * saved because there was no workflow or `onBeforeSave` cancelled. A failed
+ * request throws. Callers that relay the outcome (the WebMCP `save` tool)
+ * must not read a quiet return as a save.
+ */
+export async function globalSaveWorkflow(options: GlobalSaveOptions = {}): Promise<boolean> {
   const { eventHandlers, onMarkAsSaved, onSaved } = options;
   const features = { ...DEFAULT_FEATURES, ...options.features };
 
@@ -149,14 +155,14 @@ export async function globalSaveWorkflow(options: GlobalSaveOptions = {}): Promi
     if (features.showToasts) {
       apiToasts.error('Save workflow', 'No workflow to save');
     }
-    return;
+    return false;
   }
 
   // Step 2 — Allow the parent to cancel the save
   if (eventHandlers?.onBeforeSave) {
     const shouldContinue = await eventHandlers.onBeforeSave(currentWorkflow);
     if (shouldContinue === false) {
-      return;
+      return false;
     }
   }
 
@@ -244,6 +250,7 @@ export async function globalSaveWorkflow(options: GlobalSaveOptions = {}): Promi
     if (eventHandlers?.onAfterSave) {
       await eventHandlers.onAfterSave(savedWorkflow);
     }
+    return true;
   } catch (error) {
     if (loadingToast) dismissToast(loadingToast);
 

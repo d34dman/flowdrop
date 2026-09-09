@@ -16,7 +16,7 @@ import * as globalSaveModule from '../../../src/lib/services/globalSave.js';
 // client — the seam this suite already uses for fetch.
 vi.mock('../../../src/lib/services/globalSave.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/lib/services/globalSave.js')>();
-  return { ...actual, globalSaveWorkflow: vi.fn(async () => {}) };
+  return { ...actual, globalSaveWorkflow: vi.fn(async () => true) };
 });
 
 const textIn = {
@@ -128,6 +128,38 @@ describe('mountFlowDropApp({ webmcp })', () => {
     expect(runtime.tools.has('flowdrop_save')).toBe(true);
     const out = await runtime.call('flowdrop_save');
     expect(out.ok).toBe(true);
+    expect(globalSaveModule.globalSaveWorkflow).toHaveBeenCalledTimes(1);
+
+    app.destroy();
+  });
+
+  it('reports UNAVAILABLE, not "saved", when the mount save path saved nothing', async () => {
+    const runtime = createFakeModelContext();
+    Object.defineProperty(document, 'modelContext', { value: runtime, configurable: true });
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('no network'));
+    vi.spyOn(window, 'fetch').mockRejectedValue(new Error('no network'));
+    // The host's onBeforeSave said no: globalSaveWorkflow resolves false.
+    vi.mocked(globalSaveModule.globalSaveWorkflow).mockClear();
+    vi.mocked(globalSaveModule.globalSaveWorkflow).mockResolvedValueOnce(false);
+
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = await mountFlowDropApp(el, {
+      workflow,
+      nodes: [textIn],
+      portConfig: DEFAULT_PORT_CONFIG,
+      categories: [],
+      webmcp: { approval: 'auto' },
+      features: { showToasts: false, autoSaveDraft: false },
+      instanceId: `mount-save-cancel-${Math.random().toString(36).slice(2)}`
+    });
+
+    await untilAttached(app);
+    await app.webmcp!.ready;
+
+    const out = await runtime.call('flowdrop_save');
+    expect(out.ok).toBe(false);
+    expect(out.code).toBe('UNAVAILABLE');
     expect(globalSaveModule.globalSaveWorkflow).toHaveBeenCalledTimes(1);
 
     app.destroy();

@@ -13,6 +13,9 @@
  * person reads what the agent is doing rather than a verb list. And the
  * dialog can offer "apply further edits without asking" for the rest of the
  * page's life — edits only: `save` and `run` are consequential and always ask.
+ * The gate cannot tell one agent from another, so the offer is worded as what
+ * it is: every caller on the page is covered once it is ticked. It is still a
+ * click-to-apply — one the person chose to make once.
  *
  * @module webmcp/gate
  */

@@ -983,6 +983,7 @@ describe('executeCommand — get_config', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const data = result.data as GetConfigResultData;
+    if (!('key' in data)) throw new Error('expected the single-key shape');
     expect(data.nodeId).toBe('llm_node.1');
     expect(data.key).toBe('model');
     expect(data.value).toBe('gpt-4');
@@ -3090,6 +3091,15 @@ describe('executeCommand — search_types', () => {
     expect((result.data as { types: unknown[] }).types).toEqual([]);
     expect(result.message).toContain('list_types');
   });
+
+  it('refuses a blank query instead of dumping the catalog', () => {
+    const context = createMockContext(createMockWorkflow(), nodeTypes);
+    const result = executeCommand({ type: 'search_types', query: '   ' }, context);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('EMPTY_QUERY');
+    expect(result.error).toContain('list_types');
+  });
 });
 
 describe('executeCommand — list_types carries description and tags', () => {
@@ -3122,6 +3132,7 @@ describe('executeCommand — get_config with the schema', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const data = result.data as GetConfigResultData;
+    if ('key' in data) throw new Error('expected the all-values shape');
     expect(data.values).toEqual({ model: 'gpt-4', temperature: 0.7 });
     expect(data.schema).toEqual([
       { key: 'model', type: 'string', default: 'gpt-4' },
@@ -3140,6 +3151,7 @@ describe('executeCommand — get_config with the schema', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const data = result.data as GetConfigResultData;
+    if (!('key' in data)) throw new Error('expected the single-key shape');
     expect(data.value).toBe('gpt-4');
     expect(data.schema).toEqual({ key: 'model', type: 'string', default: 'gpt-4' });
   });
@@ -3156,6 +3168,7 @@ describe('executeCommand — get_config with the schema', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const data = result.data as GetConfigResultData;
+    if (!('key' in data)) throw new Error('expected the single-key shape');
     expect(data.value).toBeUndefined();
     expect(data.schema).toEqual({ key: 'model', type: 'string', default: 'gpt-4' });
   });

@@ -575,6 +575,7 @@ export const defaultMessages = {
     /** `{count} changes — adds 2 nodes, connects 1 edge. Applied together, undone together.` */
     batchSummary: ({ count, parts }: { count: number; parts: string }) =>
       `${count} changes — ${parts}. Applied together, undone together.`,
-    rememberEdits: 'Apply further edits from this agent without asking, until this page is closed'
+    rememberEdits:
+      'Apply further edits from any agent on this page without asking, until this page is closed'
   }
 } as const;

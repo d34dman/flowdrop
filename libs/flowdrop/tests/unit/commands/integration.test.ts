@@ -298,6 +298,7 @@ describe('Integration: parse → execute round-trip', () => {
     if (!result.ok) return;
 
     const data = result.data as GetConfigResultData;
+    if (!('key' in data)) throw new Error('expected the single-key shape');
     expect(data.key).toBe('model');
     expect(data.value).toBe('gpt-4');
     expect(data.nodeId).toBe('llm_node.1');

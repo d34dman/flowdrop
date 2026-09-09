@@ -358,7 +358,10 @@ export function attachWebMCP(
    * of its own — nothing for `executeBatch` to run — so it is gated directly
    * rather than going through `run()`'s command pipeline.
    */
-  async function runSave(input: unknown): Promise<ToolResult> {
+  async function runSave(
+    onSave: NonNullable<WebMCPOptions['onSave']>,
+    input: unknown
+  ): Promise<ToolResult> {
     if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
     const args = validateOrError(EMPTY_SCHEMA, input);
     if (isToolResult(args)) return args;
@@ -375,8 +378,7 @@ export function attachWebMCP(
 
     let envelope: void | HostEnvelope;
     try {
-      // Non-null: runSave is only wired up as a tool when options.onSave is set.
-      envelope = await options.onSave!();
+      envelope = await onSave();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (!isConflictError(err)) return errorResult('SAVE_FAILED', message);
@@ -392,7 +394,10 @@ export function attachWebMCP(
   }
 
   /** `run` starts a run through the host's `onRun`; gated like `save`. */
-  async function runRun(input: unknown): Promise<ToolResult> {
+  async function runRun(
+    onRun: NonNullable<WebMCPOptions['onRun']>,
+    input: unknown
+  ): Promise<ToolResult> {
     if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
     const args = validateOrError(RUN_SCHEMA, input);
     if (isToolResult(args)) return args;
@@ -409,7 +414,7 @@ export function attachWebMCP(
 
     let envelope: HostEnvelope;
     try {
-      envelope = await options.onRun!((args.inputs as Record<string, unknown> | undefined) ?? {});
+      envelope = await onRun((args.inputs as Record<string, unknown> | undefined) ?? {});
     } catch (err) {
       return errorResult('RUN_FAILED', err instanceof Error ? err.message : String(err));
     }
@@ -421,14 +426,17 @@ export function attachWebMCP(
    * `code: 'PENDING'` and the pause's node and message — a person must act in
    * the UI; no tool answers an interrupt (D8).
    */
-  async function runRunStatus(input: unknown): Promise<ToolResult> {
+  async function runRunStatus(
+    onRunStatus: NonNullable<WebMCPOptions['onRunStatus']>,
+    input: unknown
+  ): Promise<ToolResult> {
     if (!attached) return errorResult('DETACHED', 'This editor is no longer available');
     const args = validateOrError(RUN_STATUS_SCHEMA, input);
     if (isToolResult(args)) return args;
 
     let envelope: HostEnvelope<RunStatus>;
     try {
-      envelope = await options.onRunStatus!(args.runId as string);
+      envelope = await onRunStatus(args.runId as string);
     } catch (err) {
       return errorResult('STATUS_FAILED', err instanceof Error ? err.message : String(err));
     }
@@ -487,7 +495,8 @@ export function attachWebMCP(
   }
 
   const toolRegistrations = descriptors.map(register);
-  if (options.onSave) {
+  const { onSave, onRun, onRunStatus } = options;
+  if (onSave) {
     toolRegistrations.push(
       registerRaw({
         name: `${prefix}_save`,
@@ -500,11 +509,11 @@ export function attachWebMCP(
           nameSuffix,
         inputSchema: EMPTY_SCHEMA,
         annotations: { readOnlyHint: false, consequentialHint: true },
-        execute: (input) => runSave(input)
+        execute: (input) => runSave(onSave, input)
       })
     );
   }
-  if (options.onRun) {
+  if (onRun) {
     toolRegistrations.push(
       registerRaw({
         name: `${prefix}_run`,
@@ -512,16 +521,16 @@ export function attachWebMCP(
           'Run the saved workflow on the server with optional inputs for its interface ports. ' +
           'Save first: unsaved changes are not part of the run. Asks for approval. Returns a ' +
           '`runId`' +
-          (options.onRunStatus ? ' to poll with run_status.' : '.') +
+          (onRunStatus ? ' to poll with run_status.' : '.') +
           ' Fails with FORBIDDEN when the user may not run, UNAVAILABLE when the workflow is not saved yet, ' +
           'INVALID when the server rejected the workflow.' +
           nameSuffix,
         inputSchema: RUN_SCHEMA,
         annotations: { readOnlyHint: false, consequentialHint: true },
-        execute: (input) => runRun(input)
+        execute: (input) => runRun(onRun, input)
       })
     );
-    if (options.onRunStatus) {
+    if (onRunStatus) {
       toolRegistrations.push(
         registerRaw({
           name: `${prefix}_run_status`,
@@ -532,7 +541,7 @@ export function attachWebMCP(
             nameSuffix,
           inputSchema: RUN_STATUS_SCHEMA,
           annotations: { readOnlyHint: true },
-          execute: (input) => runRunStatus(input)
+          execute: (input) => runRunStatus(onRunStatus, input)
         })
       );
     }

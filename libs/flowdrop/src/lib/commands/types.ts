@@ -231,6 +231,8 @@ export type CommandErrorCode =
   | 'PARSE_ERROR'
   | 'UNKNOWN_COMMAND'
   | 'CONFIG_KEY_NOT_FOUND'
+  /** search_types with a blank query — use list_types for the whole catalog. */
+  | 'EMPTY_QUERY'
   | 'CONFIG_VALIDATION_ERROR'
   | 'UNDO_UNAVAILABLE'
   | 'REDO_UNAVAILABLE';
@@ -340,18 +342,23 @@ export interface InfoResultData {
   }>;
 }
 
-/**
- * Result data for get_config. With a key: that key's `value` and its `schema`
- * entry. Without one: every current `value` under `values`, and the whole
- * config `schema` as a list of keys.
- */
-export interface GetConfigResultData {
+/** get_config with a key: that key's value and its schema entry, if declared. */
+export interface GetConfigKeyResultData {
   nodeId: string;
-  key?: string;
-  value?: unknown;
-  values?: Record<string, unknown>;
-  schema?: ConfigKeyDescription | ConfigKeyDescription[];
+  key: string;
+  value: unknown;
+  schema?: ConfigKeyDescription;
 }
+
+/** get_config without a key: every current value and the whole config schema. */
+export interface GetConfigAllResultData {
+  nodeId: string;
+  values: Record<string, unknown>;
+  schema: ConfigKeyDescription[];
+}
+
+/** Result data for get_config — narrow on `'key' in data`. */
+export type GetConfigResultData = GetConfigKeyResultData | GetConfigAllResultData;
 
 /** Result data for help command */
 export interface HelpResultData {

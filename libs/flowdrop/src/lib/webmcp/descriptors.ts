@@ -86,9 +86,11 @@ const NODE_ID_DESCRIPTION =
   'Node id in short form, e.g. "http_request.1" — the `nodeId` values returned by list_nodes and add_node. Full ids are accepted too.';
 
 /**
- * The recommended call order, appended to every tool that changes the
- * workflow. For a browser agent the tool descriptions are the whole manual,
- * so the manual says how the tools fit together.
+ * The recommended call order, appended to the tools where it applies —
+ * add_node, set_config, swap_node and batch, the ones that take a type or a
+ * config key. For a browser agent the tool descriptions are the whole manual,
+ * so the manual says how the tools fit together; saying it once per relevant
+ * tool keeps the manual short.
  */
 const CALL_ORDER =
   ' Call describe_type before adding or configuring a type you have not seen; group several changes in one batch; save when done.';
@@ -210,13 +212,13 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: (c) => `Add node ${c.nodeTypeId}${c.position ? ` at ${at(c.position)}` : ''}`
   },
   delete_node: {
-    description: 'Delete a node and every edge attached to it.' + CALL_ORDER,
+    description: 'Delete a node and every edge attached to it.',
     inputSchema: object({ nodeId: nodeId() }, ['nodeId']),
     build: (a) => ({ type: 'delete_node', nodeId: a.nodeId as string }),
     summarize: (c) => `Delete node ${c.nodeId}`
   },
   rename_node: {
-    description: 'Change the display label of a node.' + CALL_ORDER,
+    description: 'Change the display label of a node.',
     inputSchema: object(
       { nodeId: nodeId(), label: { type: 'string', description: 'New display label.' } },
       ['nodeId', 'label']
@@ -225,7 +227,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: (c) => `Rename ${c.nodeId} to ${q(c.label)}`
   },
   move_node: {
-    description: 'Move a node to a canvas position.' + CALL_ORDER,
+    description: 'Move a node to a canvas position.',
     inputSchema: object({ nodeId: nodeId(), position }, ['nodeId', 'position']),
     build: (a) => ({ type: 'move_node', nodeId: a.nodeId as string, position: a.position as Pos }),
     summarize: (c) => `Move ${c.nodeId} to ${at(c.position)}`
@@ -304,8 +306,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
   },
   connect: {
     description:
-      'Connect an output port of one node to an input port of another. An unknown port fails and lists the ports on both sides; the existing edge is kept when the connection is already there.' +
-      CALL_ORDER,
+      'Connect an output port of one node to an input port of another. An unknown port fails and lists the ports on both sides; the existing edge is kept when the connection is already there.',
     inputSchema: PORT_PAIR,
     build: (a) => ({
       type: 'connect',
@@ -318,7 +319,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
       `Connect ${c.sourceNodeId}:${c.sourcePort} → ${c.targetNodeId}:${c.targetPort}`
   },
   disconnect_ports: {
-    description: 'Remove the edge between two specific ports.' + CALL_ORDER,
+    description: 'Remove the edge between two specific ports.',
     inputSchema: PORT_PAIR,
     build: (a) => ({
       type: 'disconnect_ports',
@@ -331,7 +332,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
       `Disconnect ${c.sourceNodeId}:${c.sourcePort} → ${c.targetNodeId}:${c.targetPort}`
   },
   disconnect_node: {
-    description: 'Remove every edge attached to a node.' + CALL_ORDER,
+    description: 'Remove every edge attached to a node.',
     inputSchema: object({ nodeId: nodeId() }, ['nodeId']),
     build: (a) => ({ type: 'disconnect_node', nodeId: a.nodeId as string }),
     summarize: (c) => `Disconnect every edge of ${c.nodeId}`
@@ -399,7 +400,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: () => 'Redo'
   },
   auto_layout: {
-    description: 'Re-arrange all nodes automatically. Moves existing nodes.' + CALL_ORDER,
+    description: 'Re-arrange all nodes automatically. Moves existing nodes.',
     inputSchema: object({
       direction: {
         type: 'string',
@@ -414,7 +415,7 @@ const COMMANDS: { [K in ExposedType]: CommandRecord<K> } = {
     summarize: (c) => `Auto-layout (${c.direction ?? 'horizontal'})`
   },
   beautify_layout: {
-    description: 'Tidy the layout of all nodes. Moves existing nodes.' + CALL_ORDER,
+    description: 'Tidy the layout of all nodes. Moves existing nodes.',
     inputSchema: EMPTY,
     build: () => ({ type: 'beautify_layout' }),
     summarize: () => 'Beautify layout'

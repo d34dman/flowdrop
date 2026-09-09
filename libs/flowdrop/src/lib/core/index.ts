@@ -377,6 +377,8 @@ export type {
   PortDescription,
   InfoResultData,
   GetConfigResultData,
+  GetConfigKeyResultData,
+  GetConfigAllResultData,
   SetConfigResultData,
   HelpResultData,
   CommandResultData,

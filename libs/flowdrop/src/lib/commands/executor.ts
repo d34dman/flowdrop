@@ -12,7 +12,8 @@ import type {
   CommandContext,
   CommandResult,
   AddNodeResultData,
-  GetConfigResultData,
+  GetConfigKeyResultData,
+  GetConfigAllResultData,
   SetConfigResultData,
   InfoResultData,
   ListNodesResultData,
@@ -535,7 +536,7 @@ function executeGetConfig(
 
   // No key: every value, and the schema that explains them.
   if (command.key === undefined) {
-    const resultData: GetConfigResultData = {
+    const resultData: GetConfigAllResultData = {
       nodeId: shortId,
       values: config,
       schema: describeConfigSchema(schema)
@@ -561,7 +562,7 @@ function executeGetConfig(
   }
 
   const required = new Set(schema?.required ?? []).has(command.key);
-  const resultData: GetConfigResultData = {
+  const resultData: GetConfigKeyResultData = {
     nodeId: shortId,
     key: command.key,
     value: config[command.key],
@@ -1002,18 +1003,23 @@ function executeSearchTypes(
   context: CommandContext
 ): CommandResult {
   const query = command.query.trim().toLowerCase();
-  const matches = query
-    ? context.nodeTypes.filter((m) => {
-        const fields = [
-          toShortTypeId(m.node_type_id),
-          m.node_type_id,
-          m.name,
-          m.description ?? '',
-          ...(m.tags ?? [])
-        ];
-        return fields.some((f) => f.toLowerCase().includes(query));
-      })
-    : context.nodeTypes;
+  if (!query) {
+    return {
+      ok: false,
+      error: 'search_types needs text to look for. For the whole catalog call list_types.',
+      code: 'EMPTY_QUERY'
+    };
+  }
+  const matches = context.nodeTypes.filter((m) => {
+    const fields = [
+      toShortTypeId(m.node_type_id),
+      m.node_type_id,
+      m.name,
+      m.description ?? '',
+      ...(m.tags ?? [])
+    ];
+    return fields.some((f) => f.toLowerCase().includes(query));
+  });
   const types = matches.map(typeSummary);
 
   const resultData: SearchTypesResultData = { query: command.query, types };

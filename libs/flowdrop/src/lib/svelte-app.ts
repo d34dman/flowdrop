@@ -236,9 +236,11 @@ export interface MountedFlowDropApp {
   getWorkflow: () => Workflow | null;
 
   /**
-   * Trigger save operation
+   * Trigger save operation. Resolves `true` when the workflow was written,
+   * `false` when the save was cancelled (`onBeforeSave`) or there was nothing
+   * to save; rejects when the request failed.
    */
-  save: () => Promise<void>;
+  save: () => Promise<boolean>;
 
   /**
    * Trigger export operation (downloads JSON)
@@ -692,7 +694,7 @@ export async function mountFlowDropApp(
     getWorkflow: () => fd.workflow.current,
 
     save: async () => {
-      await globalSaveWorkflow({
+      return globalSaveWorkflow({
         instance: fd,
         onSaved: (saved) => {
           // globalSaveWorkflow does not write the server-assigned ID back to the
@@ -731,7 +733,14 @@ export async function mountFlowDropApp(
   // clicking Save does; a host that supplies its own `onSave` overrides it.
   if (webmcp) {
     const webmcpOptions: WebMCPMountOptions = {
-      onSave: () => mountedApp.save(),
+      onSave: async () =>
+        (await mountedApp.save())
+          ? undefined
+          : {
+              ok: false,
+              code: 'UNAVAILABLE',
+              message: 'Nothing was saved: the host cancelled the save or no workflow is loaded.'
+            },
       ...(webmcp === true ? {} : webmcp)
     };
     void attachWebMCPToMount(fd, webmcpOptions, () => destroyed).then((handle) => {
@@ -826,7 +835,7 @@ export async function mountWorkflowEditor(
     getWorkflow: () => fd.workflow.current,
 
     save: async () => {
-      await globalSaveWorkflow({ instance: fd });
+      return globalSaveWorkflow({ instance: fd });
     },
 
     export: () => {

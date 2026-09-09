@@ -451,7 +451,7 @@ export class WorkflowStore {
 
   /**
    * Take the server's word on the workflow's revision and permissions after a
-   * save or reload. Bookkeeping only: no history entry, no dirty flag, no
+   * save (the load path sets them with the payload). Bookkeeping only: no history entry, no dirty flag, no
    * change notification — the document the user edits is unchanged. Keys the
    * server did not send are left as they were.
    */
