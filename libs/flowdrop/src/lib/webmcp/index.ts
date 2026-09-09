@@ -39,6 +39,8 @@ export { validateToolArgs, VALIDATOR_KEYWORDS } from './validate.js';
 export { ToolArgumentError } from './types.js';
 export { createFakeModelContext } from './fake.js';
 export type { FakeModelContext } from './fake.js';
+export { createBridgedModelContext, installBridgedModelContext } from './bridge.js';
+export type { WebMCPWidgetLike, BridgedModelContext } from './bridge.js';
 export type {
   ToolDescriptor,
   ToolInputSchema,
