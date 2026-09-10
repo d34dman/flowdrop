@@ -334,14 +334,27 @@ export interface HostToolDescriptor {
   consequential: boolean;
 }
 
-/** What a tool call would do, before it runs — for a transcript or a dialog. */
+/**
+ * What a tool call would do, before it runs — for a transcript or a dialog.
+ * Computed the way `runTool` will act: the layout opt-out is already applied
+ * and `asks` reflects the gate's current state, so a caller announcing the
+ * call announces what actually happens.
+ */
 export interface ToolPreview {
-  /** The commands the call maps to; empty for a host tool. */
+  /** The commands the call will run; empty for a host tool. */
   commands: Command[];
-  /** True when the call would pass through the approval gate. */
+  /** Layout commands the opt-out will skip (`chatAllowLayoutChanges` off). */
+  skipped: Command[];
+  /** True when the call passes through the approval gate. */
   mutating: boolean;
   /** True for `save` and `run`. */
   consequential: boolean;
+  /**
+   * True when the call will wait on the gate's decision — a mutating call
+   * the person has not pre-approved, or a consequential one — under a policy
+   * that asks at all (`approval: 'auto'` never does).
+   */
+  asks: boolean;
 }
 
 export interface ToolRuntimeOptions {
@@ -362,6 +375,12 @@ export interface ToolRuntimeOptions {
   container?: HTMLElement;
   messages?: MessagesOverride | (() => MessagesOverride);
   rememberEdits?: boolean;
+  /**
+   * The approval dialog's title for this runtime's calls, given the editor
+   * name — who is asking. Defaults to the gate's WebMCP wording. Lets two
+   * runtimes share one gate and still say which surface wants the change.
+   */
+  dialogTitle?: (editorName: string) => string;
 }
 
 /**

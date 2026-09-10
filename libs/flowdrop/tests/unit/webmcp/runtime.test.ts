@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createFlowDropInstance } from '../../../src/lib/stores/instanceContainer.svelte.js';
 import { createToolRuntime, buildHostToolDescriptors } from '../../../src/lib/webmcp/runtime.js';
-import { resetSettings } from '../../../src/lib/stores/settingsStore.svelte.js';
+import { resetSettings, updateSettings } from '../../../src/lib/stores/settingsStore.svelte.js';
 import type { NodeMetadata, Workflow } from '../../../src/lib/types/index.js';
 
 const textIn: NodeMetadata = {
@@ -92,19 +92,80 @@ describe('createToolRuntime', () => {
   });
 
   it('preview says what a call would do without doing it', () => {
-    const { instance, runtime } = setup({ hooks: { onSave: async () => undefined } });
+    const { instance, runtime } = setup({
+      hooks: { onSave: async () => undefined },
+      approval: 'confirm'
+    });
     const single = runtime.preview('add_node', { nodeTypeId: 'text_input' });
     expect(single?.mutating).toBe(true);
+    expect(single?.asks).toBe(true);
     expect(single?.commands.map((c) => c.type)).toEqual(['add_node']);
     expect(runtime.preview('list_nodes', {})?.mutating).toBe(false);
+    expect(runtime.preview('list_nodes', {})?.asks).toBe(false);
     expect(runtime.preview('save', {})).toEqual({
       commands: [],
+      skipped: [],
       mutating: true,
-      consequential: true
+      consequential: true,
+      asks: true
     });
     expect(runtime.preview('nope', {})).toBeNull();
     expect(runtime.preview('add_node', { bogus: 1 })).toBeNull();
     expect(instance.workflow.current?.nodes).toHaveLength(0);
+  });
+
+  it('preview reports what runTool will do: the layout opt-out and an auto policy', () => {
+    const { runtime } = setup();
+    // approval: 'auto' — a mutating call never waits on anyone.
+    expect(runtime.preview('add_node', { nodeTypeId: 'text_input' })?.asks).toBe(false);
+
+    updateSettings({ behavior: { chatAllowLayoutChanges: false } });
+    const skipped = runtime.preview('beautify_layout', {});
+    expect(skipped?.commands).toEqual([]);
+    expect(skipped?.skipped.map((c) => c.type)).toEqual(['beautify_layout']);
+    // Nothing left to gate, so it neither mutates nor asks.
+    expect(skipped?.mutating).toBe(false);
+    expect(skipped?.asks).toBe(false);
+
+    const mixed = runtime.preview('batch', {
+      commands: [{ type: 'beautify_layout' }, { type: 'add_node', nodeTypeId: 'text_input' }]
+    });
+    expect(mixed?.commands.map((c) => c.type)).toEqual(['add_node']);
+    expect(mixed?.skipped).toHaveLength(1);
+    expect(mixed?.mutating).toBe(true);
+  });
+
+  it('preview.asks goes false once the person pre-approved edits, never for save', () => {
+    const request = vi.fn(async () => true);
+    const gate = { request, busy: false, editsPreApproved: true, dispose: vi.fn() };
+    const { runtime } = setup({ gate, hooks: { onSave: async () => undefined } });
+    expect(runtime.preview('add_node', { nodeTypeId: 'text_input' })?.asks).toBe(false);
+    expect(runtime.preview('save', {})?.asks).toBe(true);
+  });
+
+  it('passes its dialog title to the gate so a shared gate says who is asking', async () => {
+    const request = vi.fn(async () => true);
+    const gate = { request, busy: false, editsPreApproved: false, dispose: vi.fn() };
+    const { runtime } = setup({
+      gate,
+      hooks: { onSave: async () => undefined },
+      dialogTitle: (name) => `The assistant wants to change ${name}`
+    });
+    await runtime.runTool('add_node', { nodeTypeId: 'text_input' });
+    await runtime.runTool('save', {});
+    expect(request).toHaveBeenLastCalledWith([], {
+      tool: 'save',
+      title: 'The assistant wants to change Runtime'
+    });
+    expect(request.mock.calls[0][1]).toEqual({
+      tool: 'add_node',
+      title: 'The assistant wants to change Runtime'
+    });
+    // Without one, the request carries no title and the gate uses its own.
+    const plain = vi.fn(async () => true);
+    const { runtime: bare } = setup({ gate: { ...gate, request: plain } });
+    await bare.runTool('add_node', { nodeTypeId: 'text_input' });
+    expect(plain).toHaveBeenCalledWith(expect.anything(), { tool: 'add_node' });
   });
 
   it('answers DETACHED after dispose and disposes once', async () => {

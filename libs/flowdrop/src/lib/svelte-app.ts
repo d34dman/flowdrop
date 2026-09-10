@@ -21,6 +21,7 @@ import { fetchPortConfig } from './services/portConfigApi.js';
 import { fetchCategories } from './services/categoriesApi.js';
 import {
   createFlowDropInstance,
+  definedHostHooks,
   getDefaultInstance,
   DEFAULT_DRAFT_PREFIX,
   type FlowDropInstance
@@ -395,15 +396,6 @@ async function configureInstance(
   return config;
 }
 
-/** The hooks a host actually supplied — an explicit `undefined` must not shadow a default. */
-function definedHooks(hooks: HostHooks): HostHooks {
-  const out: HostHooks = {};
-  if (hooks.onSave) out.onSave = hooks.onSave;
-  if (hooks.onRun) out.onRun = hooks.onRun;
-  if (hooks.onRunStatus) out.onRunStatus = hooks.onRunStatus;
-  return out;
-}
-
 /**
  * Attach the WebMCP adapter for a `mountFlowDropApp` mount.
  *
@@ -765,10 +757,15 @@ export async function mountFlowDropApp(
           code: 'UNAVAILABLE',
           message: 'Nothing was saved: the host cancelled the save or no workflow is loaded.'
         };
+  // Hook keys are merged through `definedHostHooks` on both inputs, so an
+  // explicit `onSave: undefined` in either never shadows the default.
+  const webmcpGiven: WebMCPMountOptions = webmcp === true || !webmcp ? {} : webmcp;
+  const { onSave: _s, onRun: _r, onRunStatus: _rs, ...webmcpRest } = webmcpGiven;
   const webmcpOptions: WebMCPMountOptions = {
+    ...webmcpRest,
     onSave: defaultOnSave,
-    ...definedHooks(host ?? {}),
-    ...(webmcp === true || !webmcp ? {} : webmcp)
+    ...definedHostHooks(host ?? {}),
+    ...definedHostHooks(webmcpGiven)
   };
   fd.host.set({
     onSave: webmcpOptions.onSave,

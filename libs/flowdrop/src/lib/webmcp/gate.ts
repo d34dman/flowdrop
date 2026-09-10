@@ -25,7 +25,7 @@ import type { Command } from '../commands/types.js';
 import { defaultMessages, mergeMessages, messagesContext } from '../messages/index.js';
 import type { Messages, MessagesOverride } from '../messages/index.js';
 import type { WebMCPApproval, WebMCPApprovalRequest } from './types.js';
-import { describeCommand } from './descriptors.js';
+import { describeCommand, summarizeCommands } from './descriptors.js';
 import WebMCPConfirm from './WebMCPConfirm.svelte';
 
 /** What the gate needs to know about the call it is asking approval for. */
@@ -38,6 +38,12 @@ export interface GateRequest extends WebMCPApprovalRequest {
   lines?: string[];
   /** Extra sentence shown under the title, e.g. "This cannot be undone." */
   hint?: string;
+  /**
+   * The dialog's title — who is asking. Defaults to the WebMCP wording ("A
+   * browser agent wants to change …"); the chat panel passes its own so a
+   * shared gate still says which surface is asking.
+   */
+  title?: string;
   /**
    * A consequential call (`save`, `run`) is never covered by the "don't ask
    * again for edits" choice and never offers it. Defaults to `tool` being
@@ -82,51 +88,6 @@ export interface CreateGateOptions {
 
 const CONSEQUENTIAL_TOOLS: ReadonlySet<string> = new Set(['save', 'run']);
 
-/**
- * One sentence saying what a list of commands does, for the dialog's hint:
- * "3 changes — adds 2 nodes, connects 1 edge. Applied together, undone together."
- * Returns `undefined` for a single command, whose one line already says it all.
- */
-export function summarizeCommands(commands: Command[], m: Messages['webmcp']): string | undefined {
-  if (commands.length < 2) return undefined;
-  let adds = 0;
-  let deletes = 0;
-  let connects = 0;
-  let disconnects = 0;
-  let configs = 0;
-  let other = 0;
-  for (const c of commands) {
-    switch (c.type) {
-      case 'add_node':
-        adds++;
-        break;
-      case 'delete_node':
-        deletes++;
-        break;
-      case 'connect':
-        connects++;
-        break;
-      case 'disconnect_ports':
-      case 'disconnect_node':
-        disconnects++;
-        break;
-      case 'set_config':
-        configs++;
-        break;
-      default:
-        other++;
-    }
-  }
-  const parts: string[] = [];
-  if (adds) parts.push(m.summaryAdds({ count: adds }));
-  if (deletes) parts.push(m.summaryDeletes({ count: deletes }));
-  if (connects) parts.push(m.summaryConnects({ count: connects }));
-  if (disconnects) parts.push(m.summaryDisconnects({ count: disconnects }));
-  if (configs) parts.push(m.summaryConfigs({ count: configs }));
-  if (other) parts.push(m.summaryOther({ count: other }));
-  return m.batchSummary({ count: commands.length, parts: parts.join(', ') });
-}
-
 export function createApprovalGate(
   approval: WebMCPApproval,
   options: CreateGateOptions
@@ -165,6 +126,10 @@ export function createApprovalGate(
     return commands.map(describeCommand);
   }
 
+  function resolveTitle(request: GateRequest): string {
+    return request.title ?? messages().webmcp.confirmTitle({ name: options.editorName() });
+  }
+
   function resolveHint(commands: Command[], request: GateRequest): string | undefined {
     if (request.hint !== undefined) return request.hint;
     const m = messages().webmcp;
@@ -199,7 +164,7 @@ export function createApprovalGate(
         target: host,
         context: messagesContext(messages),
         props: {
-          editorName: options.editorName(),
+          title: resolveTitle(request),
           lines: resolveLines(commands, request),
           hint: resolveHint(commands, request),
           offerRemember: offerRemember && !isConsequential(request),

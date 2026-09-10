@@ -114,7 +114,13 @@ describe('runTurn', () => {
     const out = await runTurn(request, {
       ...server,
       runTool: async () => err('REJECTED', 'The user rejected the change'),
-      preview: (): ToolPreview => ({ commands: [], mutating: true, consequential: false }),
+      preview: (): ToolPreview => ({
+        commands: [],
+        skipped: [],
+        mutating: true,
+        consequential: false,
+        asks: true
+      }),
       onEvent: (e) => events.push(e)
     });
 
@@ -149,8 +155,10 @@ describe('runTurn', () => {
         name === 'list_nodes' ? ok({ data: { nodes: [] } }) : err('NOT_FOUND', 'no such type'),
       preview: (name): ToolPreview => ({
         commands: [],
+        skipped: [],
         mutating: name !== 'list_nodes',
-        consequential: false
+        consequential: false,
+        asks: name !== 'list_nodes'
       }),
       onEvent: (e) => events.push(e)
     });
@@ -193,6 +201,58 @@ describe('runTurn', () => {
     expect(out.kind).toBe('aborted');
     expect(out.kind === 'aborted' && out.rounds).toBe(3);
     expect(server.sendToolResults).toHaveBeenCalledTimes(3);
+  });
+
+  it('names a continued turn with no tool calls as a protocol error, not an empty reply', async () => {
+    const server = scriptedServer([
+      { turnId: 't1', done: false, toolCalls: [{ id: 'c', name: 'list_nodes', args: {} }] },
+      { turnId: 't1', done: false, toolCalls: [] }
+    ]);
+    const events: TurnEvent[] = [];
+    const out = await runTurn(request, {
+      ...server,
+      runTool: async () => ok(),
+      onEvent: (e) => events.push(e)
+    });
+    expect(out.kind).toBe('aborted');
+    expect(out.kind === 'aborted' && out.rounds).toBe(1);
+    expect(out.kind === 'aborted' && out.reason).toMatch(/without any tool calls/);
+    expect(events.some((e) => e.type === 'final')).toBe(false);
+  });
+
+  it('announces awaiting-approval from the preview, not from a guess', async () => {
+    const server = scriptedServer([
+      {
+        turnId: 't1',
+        done: false,
+        toolCalls: [
+          { id: 'a', name: 'add_node', args: {} },
+          { id: 'b', name: 'beautify_layout', args: {} }
+        ]
+      },
+      { turnId: 't1', done: true, content: 'done' }
+    ]);
+    // Edits pre-approved: a mutating call no longer asks. A layout call with
+    // the opt-out on maps to nothing and asks nobody either.
+    const previews: Record<string, ToolPreview> = {
+      add_node: { commands: [], skipped: [], mutating: true, consequential: false, asks: false },
+      beautify_layout: {
+        commands: [],
+        skipped: [],
+        mutating: false,
+        consequential: false,
+        asks: false
+      }
+    };
+    const events: TurnEvent[] = [];
+    await runTurn(request, {
+      ...server,
+      runTool: async () => ok(),
+      preview: (name) => previews[name] ?? null,
+      onEvent: (e) => events.push(e)
+    });
+    expect(events.filter((e) => e.type === 'awaiting-approval')).toHaveLength(0);
+    expect(events.filter((e) => e.type === 'reading')).toHaveLength(2);
   });
 
   it('rejects when a request fails, so the panel shows the error', async () => {

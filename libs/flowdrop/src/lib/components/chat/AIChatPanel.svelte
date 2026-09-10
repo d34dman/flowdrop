@@ -20,6 +20,9 @@
   import { toToolDefinitions } from '../../chat/toolCatalogue.js';
   import { runTurn, type TurnEvent } from '../../chat/turnDriver.js';
   import type { ToolPreview, ToolRuntime } from '../../webmcp/types.js';
+  // Pure describers, no DOM: safe in the editor's static graph. The runtime
+  // itself (dialog included) stays behind a dynamic import in ensureRuntime.
+  import { describeCommand, summarizeCommands } from '../../webmcp/descriptors.js';
   import CommandPreview from './CommandPreview.svelte';
   import MarkdownDisplay from '../MarkdownDisplay.svelte';
   import { onDestroy, tick } from 'svelte';
@@ -49,7 +52,7 @@
     commandsDismissed?: boolean;
     /** Tools mode: one compact status line per tool call of this turn */
     toolLines?: ToolLine[];
-    /** Tools mode: set while the turn is still running */
+    /** Set on the assistant placeholder while its reply is still coming */
     inProgress?: boolean;
     /** Tools mode: a muted notice (legacy fallback, abort) rather than a reply */
     notice?: boolean;
@@ -114,6 +117,7 @@
   );
 
   onDestroy(() => {
+    if (runtime && fd.approvalGate === runtime.gate) fd.approvalGate = null;
     runtime?.dispose();
     runtime = null;
   });
@@ -187,25 +191,28 @@
   /**
    * The tool runtime for this panel: the same `runTool()` the WebMCP
    * registration uses, with this editor's host hooks (`fd.host`) behind
-   * `save` / `run` / `run_status` and the built-in confirm dialog as its gate.
-   * Loaded on demand so the adapter stays out of the editor's static graph.
+   * `save` / `run` / `run_status`. The gate is the editor's one shared gate
+   * (`fd.approvalGate`): reused when the registration published it first,
+   * published by us otherwise, so one "don't ask again" covers both surfaces
+   * and two dialogs never stack. Only the dialog title is ours — it is the
+   * assistant asking, not an unknown agent on the page. Loaded on demand so
+   * the adapter stays out of the editor's static graph.
    */
   async function ensureRuntime(): Promise<ToolRuntime> {
     if (runtime && !runtime.disposed) return runtime;
     const { createToolRuntime } = await import('../../webmcp/index.js');
+    const shared = fd.approvalGate;
     runtime = createToolRuntime({
       instance: fd,
       nodeTypes: () => nodeTypes,
       onUIAction,
       hooks: fd.host.current,
+      gate: shared ?? undefined,
       approval: 'confirm',
-      // The dialog is the WebMCP gate's; only its title changes hands — it is
-      // the assistant asking, not an unknown agent on the page.
-      messages: () => {
-        const all = messages();
-        return { ...all, webmcp: { ...all.webmcp, confirmTitle: all.chat.tools.confirmTitle } };
-      }
+      messages,
+      dialogTitle: (name) => messages().chat.tools.confirmTitle({ name })
     });
+    if (!shared) fd.approvalGate = runtime.gate;
     return runtime;
   }
 
@@ -226,12 +233,8 @@
    * batch summary for several commands, the one-line description for one,
    * the host's message for `save` / `run` / `run_status`.
    */
-  async function appliedDetail(
-    preview: ToolPreview | null,
-    outcome: { message?: string }
-  ): Promise<string> {
+  function appliedDetail(preview: ToolPreview | null, outcome: { message?: string }): string {
     if (preview && preview.commands.length > 0) {
-      const { describeCommand, summarizeCommands } = await import('../../webmcp/index.js');
       if (preview.commands.length === 1) return describeCommand(preview.commands[0]);
       return summarizeCommands(preview.commands, messages().webmcp) ?? '';
     }
@@ -242,8 +245,11 @@
     return msg.toolLines?.[msg.toolLines.length - 1];
   }
 
-  /** Render a driver event onto the in-progress assistant message. */
-  async function renderEvent(msg: DisplayMessage, event: TurnEvent): Promise<void> {
+  /**
+   * Render a driver event onto the in-progress assistant message. Synchronous
+   * on purpose: events arrive in order and land in order.
+   */
+  function renderEvent(msg: DisplayMessage, event: TurnEvent): void {
     const tt = t.tools;
     switch (event.type) {
       case 'reading':
@@ -265,7 +271,7 @@
           line.text = event.preview?.mutating
             ? tt.applied({
                 tool: event.call.name,
-                detail: await appliedDetail(event.preview, event.outcome)
+                detail: appliedDetail(event.preview, event.outcome)
               })
             : tt.read({ tool: event.call.name, detail: argsDetail(event.call.args) });
         }
@@ -334,7 +340,7 @@
             ),
           runTool: (name, input) => rt.runTool(name, input),
           preview: (name, input) => rt.preview(name, input),
-          onEvent: (event) => void renderEvent(msg, event)
+          onEvent: (event) => renderEvent(msg, event)
         }
       );
 
@@ -622,12 +628,21 @@
     displayMessages.push({ role: 'user', content: text, retryAttempt });
     isLoading = true;
 
+    // The reply's place in the log, shown as thinking until it arrives — the
+    // same placeholder the tools mode uses, so there is one spinner.
+    const placeholderIndex =
+      displayMessages.push({
+        role: 'assistant',
+        content: '',
+        inProgress: true
+      }) - 1;
+
     try {
       const history = getHistory();
       const request: ChatRequest = {
         message: text,
         workflowState: getWorkflowState(),
-        history: history.slice(0, -1) // all except current message
+        history: history.slice(0, -2) // all except this message and the placeholder
       };
 
       const response = await chatService.sendMessage(
@@ -636,14 +651,13 @@
         request,
         fd.api.authProvider
       );
-      const displayMsg = processResponse(response.content);
-      displayMessages.push(displayMsg);
+      displayMessages[placeholderIndex] = processResponse(response.content);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to send message';
-      displayMessages.push({
+      displayMessages[placeholderIndex] = {
         role: 'assistant',
         content: `Error: ${errorMessage}`
-      });
+      };
     } finally {
       isLoading = false;
       tick().then(() => inputElement?.focus());
@@ -697,8 +711,7 @@
         {#if message.retryAttempt !== undefined}
           <div
             class="ai-chat-panel__retry-notice"
-            class:ai-chat-panel__retry-notice--active={isLoading &&
-              msgIndex === displayMessages.length - 1}
+            class:ai-chat-panel__retry-notice--active={displayMessages[msgIndex + 1]?.inProgress}
           >
             <Icon icon="mdi:autorenew" />
             <span>{t.autoRetry({ attempt: message.retryAttempt, max: MAX_AUTO_RETRIES })}</span>
@@ -713,7 +726,7 @@
                 class="ai-chat-panel__tool-lines"
                 aria-label={t.tools.rounds({ count: message.toolLines.length })}
               >
-                {#each message.toolLines as line, i (i)}
+                {#each message.toolLines as line (line)}
                   <li class="ai-chat-panel__tool-line ai-chat-panel__tool-line--{line.status}">
                     {#if line.status === 'running'}
                       <Icon icon="mdi:loading" class="ai-chat-panel__tool-line-spin" />
@@ -765,15 +778,6 @@
           </div>
         {/if}
       {/each}
-      {#if isLoading && !displayMessages[displayMessages.length - 1]?.inProgress}
-        <div class="ai-chat-panel__bubble ai-chat-panel__bubble--assistant">
-          <div class="ai-chat-panel__thinking">
-            <span class="ai-chat-panel__dot"></span>
-            <span class="ai-chat-panel__dot"></span>
-            <span class="ai-chat-panel__dot"></span>
-          </div>
-        </div>
-      {/if}
     </div>
 
     <!-- Input area -->

@@ -16,6 +16,7 @@
 
 import type { NodeMetadata } from '../types/index.js';
 import type { HostHooks } from '../webmcp/types.js';
+import type { ApprovalGate } from '../webmcp/gate.js';
 import { HistoryService, historyService } from '../services/historyService.js';
 import { WorkflowStore } from './workflowStore.svelte.js';
 import { HistoryStore } from './historyStore.svelte.js';
@@ -101,6 +102,14 @@ export interface FlowDropInstance {
    */
   readonly host: HostHooksStore;
   /**
+   * The approval gate every agent surface on this editor asks — the WebMCP
+   * registration and the chat panel's tool loop. Whichever surface comes
+   * first creates its gate and publishes it here; the other reuses it, so one
+   * "don't ask again for edits" covers both and two dialogs never stack. The
+   * publisher clears it when it goes away. `null` until a surface exists.
+   */
+  approvalGate: ApprovalGate | null;
+  /**
    * Run `fn` when this instance is destroyed. Returns an unsubscribe; calling
    * it before `destroy()` means `fn` never runs. Adapters that bind to an
    * instance (WebMCP, host integrations) hook their teardown here instead of
@@ -134,6 +143,18 @@ export class NodeTypesStore {
 }
 
 /**
+ * The hooks actually supplied: an explicit `undefined` is dropped, so it can
+ * never shadow a default when the result is spread over one.
+ */
+export function definedHostHooks(hooks: HostHooks): HostHooks {
+  const out: HostHooks = {};
+  if (hooks.onSave) out.onSave = hooks.onSave;
+  if (hooks.onRun) out.onRun = hooks.onRun;
+  if (hooks.onRunStatus) out.onRunStatus = hooks.onRunStatus;
+  return out;
+}
+
+/**
  * The host hooks of one editor. A plain holder, not reactive: hooks are set
  * once by the mount and read at call time.
  */
@@ -146,11 +167,7 @@ export class HostHooksStore {
 
   /** Replace the hooks. Keys set to `undefined` are dropped. */
   set(hooks: HostHooks): void {
-    const next: HostHooks = {};
-    if (hooks.onSave) next.onSave = hooks.onSave;
-    if (hooks.onRun) next.onRun = hooks.onRun;
-    if (hooks.onRunStatus) next.onRunStatus = hooks.onRunStatus;
-    this.#hooks = next;
+    this.#hooks = definedHostHooks(hooks);
   }
 }
 
@@ -231,6 +248,7 @@ export function createFlowDropInstance(options: CreateInstanceOptions = {}): Flo
     pipelinePanel: new PipelinePanelStore(id),
     nodeTypes: new NodeTypesStore(),
     host: new HostHooksStore(),
+    approvalGate: null,
     onDestroy(fn) {
       cleanups.push(fn);
       return () => {

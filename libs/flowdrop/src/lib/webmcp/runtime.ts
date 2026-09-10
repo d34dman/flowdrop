@@ -128,6 +128,25 @@ function needsApproval(commands: Command[]): boolean {
   return commands.some((c) => isMutatingCommand(c.type) && !isViewCommand(c.type));
 }
 
+/**
+ * D4: the layout opt-out. Layout commands rewrite every node's position, so
+ * with `chatAllowLayoutChanges` off they are skipped, not run — a skip is not
+ * a failure and the rest of a batch still applies. `preview` and `runTool`
+ * both go through here so what is announced is what happens.
+ */
+function applyLayoutOptOut(commands: Command[]): { commands: Command[]; skipped: Command[] } {
+  if (getBehaviorSettings().chatAllowLayoutChanges) return { commands, skipped: [] };
+  const skipped: Command[] = [];
+  const kept = commands.filter((c) => {
+    if (isLayoutCommand(c.type)) {
+      skipped.push(c);
+      return false;
+    }
+    return true;
+  });
+  return { commands: kept, skipped };
+}
+
 // ============================================================================
 // Host tool schemas and descriptions
 // ============================================================================
@@ -243,6 +262,12 @@ export function createToolRuntime(options: ToolRuntimeOptions): ToolRuntime {
       rememberEdits: options.rememberEdits
     });
   const ownsGate = !options.gate;
+  // With a supplied gate the policy is its owner's; assume it asks.
+  const gateAsks = Boolean(options.gate) || (options.approval ?? 'confirm') !== 'auto';
+  const gateRequest = (tool: string) => {
+    const title = options.dialogTitle?.(editorName());
+    return title === undefined ? { tool } : { tool, title };
+  };
 
   const onUIAction: ((action: UIAction) => void) | undefined = options.onUIAction;
   const descriptors = buildToolDescriptors({ view: Boolean(onUIAction) });
@@ -273,20 +298,7 @@ export function createToolRuntime(options: ToolRuntimeOptions): ToolRuntime {
 
     const mapped = toCommands(descriptor, input);
     if ('error' in mapped) return mapped.error;
-    let commands = mapped.commands;
-
-    // D4: honour the layout opt-out with the chat panel's wording. A skip is
-    // not a failure; the rest of a batch still applies.
-    const skipped: Command[] = [];
-    if (!getBehaviorSettings().chatAllowLayoutChanges) {
-      commands = commands.filter((c) => {
-        if (isLayoutCommand(c.type)) {
-          skipped.push(c);
-          return false;
-        }
-        return true;
-      });
-    }
+    const { commands, skipped } = applyLayoutOptOut(mapped.commands);
     if (commands.length === 0) {
       return text({
         ok: true,
@@ -304,7 +316,7 @@ export function createToolRuntime(options: ToolRuntimeOptions): ToolRuntime {
     if (needsApproval(commands)) {
       let approved: boolean;
       try {
-        approved = await gate.request(commands, { tool: descriptor.verb });
+        approved = await gate.request(commands, gateRequest(descriptor.verb));
       } catch (err) {
         if (err instanceof GateBusyError) return errorResult('BUSY', err.message);
         throw err;
@@ -366,7 +378,7 @@ export function createToolRuntime(options: ToolRuntimeOptions): ToolRuntime {
   async function askHostGate(tool: 'save' | 'run'): Promise<ToolResult | null> {
     let approved: boolean;
     try {
-      approved = await gate.request([], { tool });
+      approved = await gate.request([], gateRequest(tool));
     } catch (err) {
       if (err instanceof GateBusyError) return errorResult('BUSY', err.message);
       throw err;
@@ -498,15 +510,28 @@ export function createToolRuntime(options: ToolRuntimeOptions): ToolRuntime {
 
   function preview(name: string, input: unknown): ToolPreview | null {
     const host = hostByVerb.get(name);
-    if (host) return { commands: [], mutating: !host.readOnly, consequential: host.consequential };
+    if (host) {
+      const mutating = !host.readOnly;
+      return {
+        commands: [],
+        skipped: [],
+        mutating,
+        consequential: host.consequential,
+        asks: gateAsks && mutating
+      };
+    }
     const descriptor = byVerb.get(name);
     if (!descriptor) return null;
     const mapped = toCommands(descriptor, input);
     if ('error' in mapped) return null;
+    const { commands, skipped } = applyLayoutOptOut(mapped.commands);
+    const mutating = needsApproval(commands);
     return {
-      commands: mapped.commands,
-      mutating: needsApproval(mapped.commands),
-      consequential: false
+      commands,
+      skipped,
+      mutating,
+      consequential: false,
+      asks: gateAsks && mutating && !gate.editsPreApproved
     };
   }
 

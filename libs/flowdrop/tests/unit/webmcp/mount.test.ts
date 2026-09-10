@@ -182,6 +182,23 @@ describe('mountFlowDropApp({ webmcp })', () => {
     expect(app4.instance.host.current.onRun).toBe(otherRun);
     expect(app4.instance.host.current.onRunStatus).toBe(onRunStatus);
     app4.destroy();
+
+    // An explicit `onSave: undefined` in either option never shadows the default.
+    const el5 = document.createElement('div');
+    document.body.appendChild(el5);
+    const app5 = await mountFlowDropApp(el5, {
+      workflow,
+      nodes: [textIn],
+      portConfig: DEFAULT_PORT_CONFIG,
+      categories: [],
+      host: { onSave: undefined, onRun },
+      webmcp: { onSave: undefined, onRun: undefined },
+      features: { showToasts: false, autoSaveDraft: false },
+      instanceId: `mount-host5-${Math.random().toString(36).slice(2)}`
+    });
+    expect(typeof app5.instance.host.current.onSave).toBe('function');
+    expect(app5.instance.host.current.onRun).toBe(onRun);
+    app5.destroy();
   });
 
   it("registers flowdrop_save and calling it invokes the mount's save path", async () => {

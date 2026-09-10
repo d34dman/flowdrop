@@ -18,6 +18,7 @@
  */
 
 import type { Command } from '../commands/types.js';
+import type { Messages } from '../messages/types.js';
 import { isMutatingCommand, VIEW_COMMAND_TYPES } from '../chat/commandClassifier.js';
 import {
   ToolArgumentError,
@@ -641,4 +642,49 @@ export function describeCommand(command: Command): string {
     return (COMMANDS[type as ExposedType].summarize as (c: Command) => string)(command);
   }
   return (OTHER_SUMMARIES[type as keyof typeof OTHER_SUMMARIES] as (c: Command) => string)(command);
+}
+
+/**
+ * One sentence saying what a list of commands does, for the approval dialog's hint and the chat transcript:
+ * "3 changes — adds 2 nodes, connects 1 edge. Applied together, undone together."
+ * Returns `undefined` for a single command, whose one line already says it all.
+ */
+export function summarizeCommands(commands: Command[], m: Messages['webmcp']): string | undefined {
+  if (commands.length < 2) return undefined;
+  let adds = 0;
+  let deletes = 0;
+  let connects = 0;
+  let disconnects = 0;
+  let configs = 0;
+  let other = 0;
+  for (const c of commands) {
+    switch (c.type) {
+      case 'add_node':
+        adds++;
+        break;
+      case 'delete_node':
+        deletes++;
+        break;
+      case 'connect':
+        connects++;
+        break;
+      case 'disconnect_ports':
+      case 'disconnect_node':
+        disconnects++;
+        break;
+      case 'set_config':
+        configs++;
+        break;
+      default:
+        other++;
+    }
+  }
+  const parts: string[] = [];
+  if (adds) parts.push(m.summaryAdds({ count: adds }));
+  if (deletes) parts.push(m.summaryDeletes({ count: deletes }));
+  if (connects) parts.push(m.summaryConnects({ count: connects }));
+  if (disconnects) parts.push(m.summaryDisconnects({ count: disconnects }));
+  if (configs) parts.push(m.summaryConfigs({ count: configs }));
+  if (other) parts.push(m.summaryOther({ count: other }));
+  return m.batchSummary({ count: commands.length, parts: parts.join(', ') });
 }

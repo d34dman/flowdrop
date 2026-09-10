@@ -139,6 +139,32 @@ describe('attachWebMCP — registration', () => {
     expect(runtime.tools.size).toBe(0);
   });
 
+  it('publishes its gate on the instance, reuses one already there, and clears only its own', async () => {
+    const { handle, instance } = await setup('auto');
+    expect(instance.approvalGate).not.toBeNull();
+    const own = instance.approvalGate;
+    handle?.detach();
+    expect(instance.approvalGate).toBeNull();
+
+    // Another surface published first: the registration asks that gate, and
+    // detaching leaves it in place — it is not ours.
+    const request = vi.fn(async () => true);
+    const shared = { request, busy: false, editsPreApproved: false, dispose: vi.fn() };
+    const runtime = createFakeModelContext();
+    const other = createFlowDropInstance({ id: `t-${Math.random().toString(36).slice(2)}` });
+    other.workflow.initialize(workflow());
+    other.approvalGate = shared;
+    const h2 = attachWebMCP(other, { nodeTypes, approval: 'confirm', modelContext: runtime });
+    await h2?.ready;
+    await runtime.call('flowdrop_add_node', { nodeTypeId: 'text_input' });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0][1]).toEqual({ tool: 'add_node' });
+    h2?.detach();
+    expect(other.approvalGate).toBe(shared);
+    expect(shared.dispose).not.toHaveBeenCalled();
+    expect(own).not.toBe(shared);
+  });
+
   it('a detached adapter leaves nothing behind on the instance', async () => {
     const { handle, instance } = await setup();
     const detach = vi.spyOn(handle, 'detach');

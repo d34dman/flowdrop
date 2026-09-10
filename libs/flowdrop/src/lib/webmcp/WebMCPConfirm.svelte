@@ -13,8 +13,8 @@
   import { focusOnMount } from '../utils/focus.js';
 
   interface Props {
-    /** Editor / workflow name, so two editors on one page are distinguishable. */
-    editorName: string;
+    /** The title — who wants to change which editor (see `GateRequest.title`). */
+    title: string;
     /** One human-readable line per command (see `describeCommand`). */
     lines: string[];
     /**
@@ -31,7 +31,7 @@
     onResolve: (approved: boolean, remember?: boolean) => void;
   }
 
-  let { editorName, lines, hint, offerRemember = false, onResolve }: Props = $props();
+  let { title, lines, hint, offerRemember = false, onResolve }: Props = $props();
 
   let rejectButton = $state<HTMLButtonElement | null>(null);
   let approveButton = $state<HTMLButtonElement | null>(null);
@@ -68,7 +68,7 @@
     onkeydown={handleKeydown}
   >
     <h2 id="fd-webmcp-confirm-title" class="fd-webmcp-confirm__title">
-      {m().webmcp.confirmTitle({ name: editorName })}
+      {title}
     </h2>
     <p class="fd-webmcp-confirm__hint">
       {hint ?? m().webmcp.confirmCount({ count: lines.length })}

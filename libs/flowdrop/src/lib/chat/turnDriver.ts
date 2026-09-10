@@ -39,7 +39,7 @@ export interface ToolOutcome {
 export type TurnEvent =
   /** A read or view call is about to run; nothing to approve. */
   | { type: 'reading'; call: ChatToolCall; preview: ToolPreview | null }
-  /** A document change or a consequential call is about to ask the person. */
+  /** The call is about to wait on the gate (`preview.asks`). */
   | { type: 'awaiting-approval'; call: ChatToolCall; preview: ToolPreview | null }
   /** The call ran and reported `ok`. */
   | { type: 'applied'; call: ChatToolCall; preview: ToolPreview | null; outcome: ToolOutcome }
@@ -61,7 +61,10 @@ export type TurnOutcome =
    * text mode for the rest of the session.
    */
   | { kind: 'legacy'; content: string }
-  /** The driver stopped the loop itself (see `maxRounds`). */
+  /**
+   * The driver stopped the loop itself: past `maxRounds`, or the server
+   * continued the turn (`done: false`) without a single tool call to run.
+   */
   | { kind: 'aborted'; reason: string; rounds: number; turnId: string };
 
 // ============================================================================
@@ -139,7 +142,17 @@ export async function runTurn(
   const turnId = response.turnId as string;
   let rounds = 0;
 
-  while (!response.done && response.toolCalls && response.toolCalls.length > 0) {
+  while (!response.done) {
+    if (!response.toolCalls || response.toolCalls.length === 0) {
+      // Not a reply and nothing to run: a protocol error, named as one rather
+      // than rendered as an empty answer.
+      return {
+        kind: 'aborted',
+        reason: 'The server continued the turn without any tool calls to run.',
+        rounds,
+        turnId
+      };
+    }
     rounds++;
     if (rounds > maxRounds) {
       return {
@@ -155,8 +168,7 @@ export async function runTurn(
     // a batch's outcome may change what the next call finds.
     for (const call of response.toolCalls) {
       const seen = preview(call.name, call.args);
-      const asks = seen ? seen.mutating || seen.consequential : false;
-      emit({ type: asks ? 'awaiting-approval' : 'reading', call, preview: seen });
+      emit({ type: seen?.asks ? 'awaiting-approval' : 'reading', call, preview: seen });
 
       const result = await deps.runTool(call.name, call.args);
       const outcome = parseOutcome(result);
