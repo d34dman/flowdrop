@@ -5,25 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-- **Hosts can hide the Command Console and the AI Assistant.** Two new feature flags, **`features.console`** and **`features.assistant`** (both default `true`), drop the matching tab from the console / AI Assistant group wherever it is hosted (sidebar, bottom panel, modal). With one tab left the strip collapses to a plain panel; with both off the canvas toggle button and its backtick shortcut disappear too. Independent of the flag, the AI Assistant tab is now offered only when the endpoint configuration carries a `chat` group — before, a host without a chat backend still got the tab with a dead "requires backend configuration" notice. Browser agents (WebMCP) are unaffected either way; they drive the tool runtime, not the panel.
-- **Tools mode reports a failed turn deterministically, instead of trusting the model's closing prose.** A `batch` call that fails and rolls back no longer lets the assistant's final text claim success unchallenged: `runTurn`'s final `TurnOutcome` and `'final'` `TurnEvent` now carry `failed`/`rejected` counts over the whole turn, and the panel shows a warning under the reply (`defaultMessages.chat.tools.failedSummary`) whenever `failed > 0`.
-- **Interim model text now shows up in the trace.** A non-final `ChatTurnResponse` can carry `content` alongside `toolCalls` — text the model wrote next to its calls, e.g. "this node has no url input port". The driver emits it as a new `'note'` `TurnEvent`, and the panel renders it as an italic note line in the tool trace.
-- New tool-line status `'note'` and `DisplayMessage.warning` in `AIChatPanel.svelte`.
-- **`ApprovalGate.asks`** — whether the gate can ask at all (`false` under `approval: 'auto'`). `ToolPreview.asks` reads it, so the transcript's "waiting for your approval" line is honest for a shared gate too: before, a runtime given another surface's gate assumed it asked.
-
-### Fixed
-
-- **The AI Assistant panel no longer clears an approval gate it did not publish.** Closing the console after a tools-mode message used to null `instance.approvalGate` even when the WebMCP registration had published it, so the next panel built a second gate — one "don't ask again" per surface, and two dialogs could stack. The panel now clears only the gate it created. A turn still in flight when the panel unmounts keeps its runtime until the turn ends instead of answering `DETACHED` to the model for the rest of the round, and the transcript scrolls as tool lines and the reply grow.
-
-### Changed
-
-- **The WebMCP approval dialog now looks like the rest of the editor.** `WebMCPConfirm` follows the Settings modal shell — blurred backdrop, header / body / footer on the `xl` spacing rhythm, an `lg` title, the command list as a bordered card, a 16px checkbox, an enter animation, a bottom-sheet layout under 640px — and its buttons compose on `.flowdrop-btn` (`--primary` / `--outline`) instead of one-off styles. Test ids are unchanged.
-
-## [2.8.0] - 2026-09-09
+## [2.8.0] - 2026-09-10
 
 ### Added
 
@@ -37,14 +19,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`runTurn(request, deps)`** (new, `@flowdrop/flowdrop/chat`) — the turn driver, free of Svelte and the DOM: `send` → for each call `runTool` → `sendToolResults` → until `done`, emitting `TurnEvent`s (`reading`, `awaiting-approval`, `applied`, `rejected`, `failed`, `round-complete`, `final`) and returning a `TurnOutcome` (`final` | `legacy` | `aborted`). A client-side `maxRounds` (default 32) backstops the server's own bound. With `parseOutcome`, `toolResultText` and the types `TurnDriverDeps`, `TurnEvent`, `TurnOutcome`, `ToolOutcome`.
 - **New chat types** in `@flowdrop/flowdrop/chat`: `ChatToolDefinition`, `ChatToolCall`, `ChatToolResult`, `ChatToolResultsRequest`, `ChatTurnRequest`, `ChatTurnResponse`. New strings under `defaultMessages.chat.tools` (`reading`, `read`, `awaitingApproval`, `applied`, `rejected`, `failed`, `rounds`, `legacyFallback`, `aborted`, and `confirmTitle` — the approval dialog says the assistant is asking, not a browser agent). The Settings panel gained "AI Assistant Mode". The MSW mock backend scripts one round of reads for a tool-calling turn so the dev pages exercise the mode.
 
+- **API refusals arrive with their reasons.** `ApiError.details` holds the server's reasons behind `message` — for a fddo validation failure the `details[].message` strings, for a 403 the permission the user lacks. Error toasts render them as a list under the headline, the WebMCP `save` tool relays them to the agent, and the exported `ToastOptions.details` / `ToastOptions.id` let a host do the same. New exports: `parseApiErrorBody`, `errorDetails`.
+- **Hosts can hide the Command Console and the AI Assistant.** Two new feature flags, **`features.console`** and **`features.assistant`** (both default `true`), drop the matching tab from the console / AI Assistant group wherever it is hosted (sidebar, bottom panel, modal). With one tab left the strip collapses to a plain panel; with both off the canvas toggle button and its backtick shortcut disappear too. Independent of the flag, the AI Assistant tab is now offered only when the endpoint configuration carries a `chat` group — before, a host without a chat backend still got the tab with a dead "requires backend configuration" notice. Browser agents (WebMCP) are unaffected either way; they drive the tool runtime, not the panel.
+- **Tools mode reports a failed turn deterministically, instead of trusting the model's closing prose.** A `batch` call that fails and rolls back no longer lets the assistant's final text claim success unchallenged: `runTurn`'s final `TurnOutcome` and `'final'` `TurnEvent` now carry `failed`/`rejected` counts over the whole turn, and the panel shows a warning under the reply (`defaultMessages.chat.tools.failedSummary`) whenever `failed > 0`.
+- **Interim model text now shows up in the trace.** A non-final `ChatTurnResponse` can carry `content` alongside `toolCalls` — text the model wrote next to its calls, e.g. "this node has no url input port". The driver emits it as a new `'note'` `TurnEvent`, and the panel renders it as an italic note line in the tool trace.
+- New tool-line status `'note'` and `DisplayMessage.warning` in `AIChatPanel.svelte`.
+
+- **`ApprovalGate.asks`** — whether the gate can ask at all (`false` under `approval: 'auto'`). `ToolPreview.asks` reads it, so the transcript's "waiting for your approval" line is honest for a shared gate too: before, a runtime given another surface's gate assumed it asked.
+
+### Fixed
+
+- **The AI Assistant panel no longer clears an approval gate it did not publish.** Closing the console after a tools-mode message used to null `instance.approvalGate` even when the WebMCP registration had published it, so the next panel built a second gate — one "don't ask again" per surface, and two dialogs could stack. The panel now clears only the gate it created. A turn still in flight when the panel unmounts keeps its runtime until the turn ends instead of answering `DETACHED` to the model for the rest of the round, and the transcript scrolls as tool lines and the reply grow.
+
 ### Changed
 
 - **Error and warning toasts stay until dismissed.** `TOAST_DURATION.ERROR` and `TOAST_DURATION.WARNING` are now `Infinity`; both toasts carry a close button, and a toast with the same text replaces the one already showing instead of stacking. This is a policy change for the exported `showWarning`: the editor treats a warning as something the user should act on, not a "done, by the way". A caller that wants an informational warning passes a finite `duration`. Warnings also wear their own icon and colour instead of the error's.
 - **The API client retries only what can change.** Network failures, 408, 429 and 5xx are retried; every other 4xx is a refusal and is thrown at once. A stale save used to send three PUTs and get three 409s.
-
-### Added
-
-- **API refusals arrive with their reasons.** `ApiError.details` holds the server's reasons behind `message` — for a fddo validation failure the `details[].message` strings, for a 403 the permission the user lacks. Error toasts render them as a list under the headline, the WebMCP `save` tool relays them to the agent, and the exported `ToastOptions.details` / `ToastOptions.id` let a host do the same. New exports: `parseApiErrorBody`, `errorDetails`.
+- **The WebMCP approval dialog now looks like the rest of the editor.** `WebMCPConfirm` follows the Settings modal shell — blurred backdrop, header / body / footer on the `xl` spacing rhythm, an `lg` title, the command list as a bordered card, a 16px checkbox, an enter animation, a bottom-sheet layout under 640px — and its buttons compose on `.flowdrop-btn` (`--primary` / `--outline`) instead of one-off styles. Test ids are unchanged.
 
 ## [2.7.0] - 2026-09-09
 
