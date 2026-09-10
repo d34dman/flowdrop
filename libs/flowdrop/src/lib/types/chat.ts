@@ -146,6 +146,11 @@ export interface ChatToolResultsRequest {
  * carries `toolCalls` the panel must run and post back. `turnId` is present
  * on every response of a tool-calling server; its absence marks a legacy
  * server and a plain {@link ChatResponse}.
+ *
+ * `content` may also accompany `toolCalls` on a non-final response
+ * (`done: false`): text the model wrote alongside its calls — a note to the
+ * user, e.g. "this node has no url input port" — rather than the reply.
+ * Shown in the trace, never as the message body.
  */
 export interface ChatTurnResponse extends ChatResponse {
   turnId?: string;

@@ -61,7 +61,14 @@ describe('runTurn', () => {
   it('finishes at once when the server answers text with done', async () => {
     const server = scriptedServer([{ turnId: 't1', content: 'Hello', done: true }]);
     const out = await runTurn(request, { ...server, runTool: vi.fn() });
-    expect(out).toEqual({ kind: 'final', content: 'Hello', rounds: 0, turnId: 't1' });
+    expect(out).toEqual({
+      kind: 'final',
+      content: 'Hello',
+      rounds: 0,
+      turnId: 't1',
+      failed: 0,
+      rejected: 0
+    });
   });
 
   it('runs each call in order, posts the results with their ids, and loops until done', async () => {
@@ -98,7 +105,14 @@ describe('runTurn', () => {
     });
     expect(server.posted[0].results[0].isError).toBeUndefined();
     expect(server.sendToolResults).toHaveBeenCalledWith('t1', expect.anything());
-    expect(out).toEqual({ kind: 'final', content: 'Built.', rounds: 2, turnId: 't1' });
+    expect(out).toEqual({
+      kind: 'final',
+      content: 'Built.',
+      rounds: 2,
+      turnId: 't1',
+      failed: 0,
+      rejected: 0
+    });
   });
 
   it('a rejected call is a result, not an end: the loop continues and the model reads REJECTED', async () => {
@@ -253,6 +267,76 @@ describe('runTurn', () => {
     });
     expect(events.filter((e) => e.type === 'awaiting-approval')).toHaveLength(0);
     expect(events.filter((e) => e.type === 'reading')).toHaveLength(2);
+  });
+
+  it('emits a note for interim text alongside tool calls, before that round starts', async () => {
+    const server = scriptedServer([
+      {
+        turnId: 't1',
+        done: false,
+        content: '  I see, no url input.  ',
+        toolCalls: [{ id: 'c1', name: 'list_nodes', args: {} }]
+      },
+      { turnId: 't1', done: true, content: 'done' }
+    ]);
+    const events: TurnEvent[] = [];
+    await runTurn(request, {
+      ...server,
+      runTool: async () => ok(),
+      onEvent: (e) => events.push(e)
+    });
+    expect(events[0]).toEqual({ type: 'note', content: 'I see, no url input.', round: 1 });
+    expect(events[1].type).toBe('reading');
+  });
+
+  it('emits no note for an empty, whitespace-only, or absent content', async () => {
+    for (const content of [undefined, '', '   ']) {
+      const server = scriptedServer([
+        {
+          turnId: 't1',
+          done: false,
+          ...(content === undefined ? {} : { content }),
+          toolCalls: [{ id: 'c1', name: 'list_nodes', args: {} }]
+        },
+        { turnId: 't1', done: true, content: 'done' }
+      ]);
+      const events: TurnEvent[] = [];
+      await runTurn(request, {
+        ...server,
+        runTool: async () => ok(),
+        onEvent: (e) => events.push(e)
+      });
+      expect(events.some((e) => e.type === 'note')).toBe(false);
+    }
+  });
+
+  it('counts failed and rejected calls separately over the whole turn', async () => {
+    const server = scriptedServer([
+      {
+        turnId: 't1',
+        done: false,
+        toolCalls: [
+          { id: 'c1', name: 'batch', args: {} },
+          { id: 'c2', name: 'batch', args: {} },
+          { id: 'c3', name: 'batch', args: {} }
+        ]
+      },
+      { turnId: 't1', done: true, content: 'Done.' }
+    ]);
+    let call = 0;
+    const outcomes = [err('INVALID_CONNECTION'), err('REJECTED'), ok()];
+    const out = await runTurn(request, {
+      ...server,
+      runTool: async () => outcomes[call++]
+    });
+    expect(out).toEqual({
+      kind: 'final',
+      content: 'Done.',
+      rounds: 1,
+      turnId: 't1',
+      failed: 1,
+      rejected: 1
+    });
   });
 
   it('rejects when a request fails, so the panel shows the error', async () => {

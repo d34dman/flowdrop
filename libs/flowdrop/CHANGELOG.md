@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Tools mode reports a failed turn deterministically, instead of trusting the model's closing prose.** A `batch` call that fails and rolls back no longer lets the assistant's final text claim success unchallenged: `runTurn`'s final `TurnOutcome` and `'final'` `TurnEvent` now carry `failed`/`rejected` counts over the whole turn, and the panel shows a warning under the reply (`defaultMessages.chat.tools.failedSummary`) whenever `failed > 0`.
+- **Interim model text now shows up in the trace.** A non-final `ChatTurnResponse` can carry `content` alongside `toolCalls` — text the model wrote next to its calls, e.g. "this node has no url input port". The driver emits it as a new `'note'` `TurnEvent`, and the panel renders it as an italic note line in the tool trace.
+- New tool-line status `'note'` and `DisplayMessage.warning` in `AIChatPanel.svelte`.
+
 ## [2.8.0] - 2026-09-09
 
 ### Added

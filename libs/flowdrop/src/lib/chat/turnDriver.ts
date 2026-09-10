@@ -12,6 +12,11 @@
  * as events the panel renders. Rejection at the gate is not an error here —
  * the `REJECTED` result goes back to the model, which gets to explain or ask.
  *
+ * The final outcome also carries `failed`/`rejected` counts over the whole
+ * turn, so the panel can warn deterministically rather than trust the
+ * model's closing prose — a batch that failed and rolled back does not
+ * always stop the model from claiming success.
+ *
  * @module chat/turnDriver
  */
 
@@ -37,6 +42,11 @@ export interface ToolOutcome {
 }
 
 export type TurnEvent =
+  /**
+   * The model wrote text alongside its tool calls; shown in the trace, it
+   * is not the reply.
+   */
+  | { type: 'note'; content: string; round: number }
   /** A read or view call is about to run; nothing to approve. */
   | { type: 'reading'; call: ChatToolCall; preview: ToolPreview | null }
   /** The call is about to wait on the gate (`preview.asks`). */
@@ -50,11 +60,20 @@ export type TurnEvent =
   /** Every call of a round ran; the results are being posted. */
   | { type: 'round-complete'; round: number; results: ChatToolResult[] }
   /** The server ended the turn with text. */
-  | { type: 'final'; content: string; rounds: number };
+  | { type: 'final'; content: string; rounds: number; failed: number; rejected: number };
 
 export type TurnOutcome =
   /** A tool-calling server finished the turn. */
-  | { kind: 'final'; content: string; rounds: number; turnId: string }
+  | {
+      kind: 'final';
+      content: string;
+      rounds: number;
+      turnId: string;
+      /** Calls whose parsed outcome was not ok and not a `REJECTED` gate decision. */
+      failed: number;
+      /** Calls the person rejected at the gate (`code === 'REJECTED'`). */
+      rejected: number;
+    }
   /**
    * The first response had no `turnId`: a legacy server that answered a plain
    * chat response. `content` is what it said; the caller falls back to the
@@ -141,6 +160,8 @@ export async function runTurn(
   }
   const turnId = response.turnId as string;
   let rounds = 0;
+  let failed = 0;
+  let rejected = 0;
 
   while (!response.done) {
     if (!response.toolCalls || response.toolCalls.length === 0) {
@@ -163,6 +184,10 @@ export async function runTurn(
       };
     }
 
+    if (typeof response.content === 'string' && response.content.trim() !== '') {
+      emit({ type: 'note', content: response.content.trim(), round: rounds });
+    }
+
     const results: ChatToolResult[] = [];
     // Sequential on purpose: the gate can hold one decision at a time, and
     // a batch's outcome may change what the next call finds.
@@ -175,8 +200,10 @@ export async function runTurn(
       if (outcome.ok) {
         emit({ type: 'applied', call, preview: seen, outcome });
       } else if (outcome.code === 'REJECTED') {
+        rejected++;
         emit({ type: 'rejected', call, preview: seen, outcome });
       } else {
+        failed++;
         emit({ type: 'failed', call, preview: seen, outcome });
       }
       results.push({
@@ -191,6 +218,6 @@ export async function runTurn(
   }
 
   const content = response.content ?? '';
-  emit({ type: 'final', content, rounds });
-  return { kind: 'final', content, rounds, turnId };
+  emit({ type: 'final', content, rounds, failed, rejected });
+  return { kind: 'final', content, rounds, turnId, failed, rejected };
 }

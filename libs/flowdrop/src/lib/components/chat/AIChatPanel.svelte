@@ -56,11 +56,13 @@
     inProgress?: boolean;
     /** Tools mode: a muted notice (legacy fallback, abort) rather than a reply */
     notice?: boolean;
+    /** Tools mode: a deterministic warning under the reply, e.g. tool calls failed this turn */
+    warning?: string;
   }
 
   /** One tool call as the transcript shows it: what ran and how it ended. */
   interface ToolLine {
-    status: 'running' | 'ok' | 'rejected' | 'failed';
+    status: 'running' | 'ok' | 'rejected' | 'failed' | 'note';
     text: string;
   }
 
@@ -252,6 +254,9 @@
   function renderEvent(msg: DisplayMessage, event: TurnEvent): void {
     const tt = t.tools;
     switch (event.type) {
+      case 'note':
+        msg.toolLines?.push({ status: 'note', text: event.content });
+        break;
       case 'reading':
         msg.toolLines?.push({
           status: 'running',
@@ -356,6 +361,9 @@
         msg.content = t.tools.aborted({ reason: outcome.reason });
       } else {
         msg.content = outcome.content;
+        if (outcome.failed > 0) {
+          msg.warning = t.tools.failedSummary({ count: outcome.failed });
+        }
       }
       if ((msg.toolLines?.length ?? 0) === 0) msg.toolLines = undefined;
     } catch (err) {
@@ -734,6 +742,8 @@
                       <Icon icon="mdi:check" />
                     {:else if line.status === 'rejected'}
                       <Icon icon="mdi:cancel" />
+                    {:else if line.status === 'note'}
+                      <Icon icon="mdi:comment-text-outline" />
                     {:else}
                       <Icon icon="mdi:alert-circle-outline" />
                     {/if}
@@ -757,6 +767,12 @@
             {:else}
               <div class="ai-chat-panel__bubble-content">
                 <MarkdownDisplay content={message.content} />
+              </div>
+            {/if}
+            {#if message.warning}
+              <div class="ai-chat-panel__turn-warning" role="status">
+                <Icon icon="mdi:alert-circle-outline" />
+                <span>{message.warning}</span>
               </div>
             {/if}
             {#if message.readOnlyResults && message.readOnlyResults.length > 0}
@@ -1001,7 +1017,7 @@
 
   .ai-chat-panel__tool-line {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: var(--fd-space-3xs);
     font-size: var(--fd-text-xs);
     color: var(--fd-muted-foreground);
@@ -1011,6 +1027,7 @@
   .ai-chat-panel__tool-line :global(svg) {
     flex-shrink: 0;
     font-size: 0.9rem;
+    margin-top: 0.1em;
   }
 
   .ai-chat-panel__tool-line--ok :global(svg) {
@@ -1024,6 +1041,30 @@
 
   .ai-chat-panel__tool-line :global(.ai-chat-panel__tool-line-spin) {
     animation: spin 1s linear infinite;
+  }
+
+  .ai-chat-panel__tool-line--note {
+    color: var(--fd-foreground);
+    font-style: italic;
+    white-space: pre-wrap;
+  }
+
+  .ai-chat-panel__tool-line--note :global(svg) {
+    color: var(--fd-muted-foreground);
+  }
+
+  /* Deterministic warning under the reply (e.g. tool calls failed this turn) */
+  .ai-chat-panel__turn-warning {
+    display: flex;
+    align-items: center;
+    gap: var(--fd-space-3xs);
+    margin-top: var(--fd-space-3xs);
+    font-size: var(--fd-text-xs);
+    color: var(--fd-destructive, var(--fd-foreground));
+  }
+
+  .ai-chat-panel__turn-warning :global(svg) {
+    flex-shrink: 0;
   }
 
   /* Notices (legacy fallback, aborted turn) */

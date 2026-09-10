@@ -292,7 +292,12 @@ export const defaultMessages = {
         `${count} ${count === 1 ? 'tool round' : 'tool rounds'}`,
       legacyFallback:
         'This backend does not support tool-calling turns; using the text mode for this session.',
-      aborted: ({ reason }: { reason: string }) => `Stopped: ${reason}`
+      aborted: ({ reason }: { reason: string }) => `Stopped: ${reason}`,
+      /** Deterministic warning under the reply when one or more tool calls failed this turn. */
+      failedSummary: ({ count }: { count: number }) =>
+        count === 1
+          ? 'One tool call failed during this turn. Check the steps above before relying on the reply.'
+          : `${count} tool calls failed during this turn. Check the steps above before relying on the reply.`
     },
     // CommandPreview labels.
     commandPreview: {
