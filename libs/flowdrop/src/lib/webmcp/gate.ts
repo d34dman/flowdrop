@@ -61,6 +61,12 @@ export interface ApprovalGate {
   request(commands: Command[], request: GateRequest): Promise<boolean>;
   /** True while a decision is pending. */
   readonly busy: boolean;
+  /**
+   * Whether this gate can ask at all. `false` under `approval: 'auto'`, where
+   * every request resolves at once; a caller announcing "waiting for your
+   * approval" reads this rather than guessing from how it got the gate.
+   */
+  readonly asks: boolean;
   /** True once the person chose to apply further edits without asking. */
   readonly editsPreApproved: boolean;
   /** Dismiss any open dialog (as a rejection) and release resources. */
@@ -179,6 +185,9 @@ export function createApprovalGate(
   return {
     get busy() {
       return pending;
+    },
+    get asks() {
+      return approval !== 'auto';
     },
     get editsPreApproved() {
       return editsPreApproved;

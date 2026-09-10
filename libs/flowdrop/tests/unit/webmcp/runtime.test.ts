@@ -137,15 +137,24 @@ describe('createToolRuntime', () => {
 
   it('preview.asks goes false once the person pre-approved edits, never for save', () => {
     const request = vi.fn(async () => true);
-    const gate = { request, busy: false, editsPreApproved: true, dispose: vi.fn() };
+    const gate = { request, busy: false, asks: true, editsPreApproved: true, dispose: vi.fn() };
     const { runtime } = setup({ gate, hooks: { onSave: async () => undefined } });
     expect(runtime.preview('add_node', { nodeTypeId: 'text_input' })?.asks).toBe(false);
     expect(runtime.preview('save', {})?.asks).toBe(true);
   });
 
+  it('preview.asks follows a shared gate that never asks, instead of assuming it does', () => {
+    const request = vi.fn(async () => true);
+    // A gate another surface built under approval: 'auto'.
+    const gate = { request, busy: false, asks: false, editsPreApproved: false, dispose: vi.fn() };
+    const { runtime } = setup({ gate, hooks: { onSave: async () => undefined } });
+    expect(runtime.preview('add_node', { nodeTypeId: 'text_input' })?.asks).toBe(false);
+    expect(runtime.preview('save', {})?.asks).toBe(false);
+  });
+
   it('passes its dialog title to the gate so a shared gate says who is asking', async () => {
     const request = vi.fn(async () => true);
-    const gate = { request, busy: false, editsPreApproved: false, dispose: vi.fn() };
+    const gate = { request, busy: false, asks: true, editsPreApproved: false, dispose: vi.fn() };
     const { runtime } = setup({
       gate,
       hooks: { onSave: async () => undefined },

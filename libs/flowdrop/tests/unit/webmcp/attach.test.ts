@@ -143,13 +143,15 @@ describe('attachWebMCP — registration', () => {
     const { handle, instance } = await setup('auto');
     expect(instance.approvalGate).not.toBeNull();
     const own = instance.approvalGate;
+    // The gate says whether it can ask at all; under 'auto' it cannot.
+    expect(own?.asks).toBe(false);
     handle?.detach();
     expect(instance.approvalGate).toBeNull();
 
     // Another surface published first: the registration asks that gate, and
     // detaching leaves it in place — it is not ours.
     const request = vi.fn(async () => true);
-    const shared = { request, busy: false, editsPreApproved: false, dispose: vi.fn() };
+    const shared = { request, busy: false, asks: true, editsPreApproved: false, dispose: vi.fn() };
     const runtime = createFakeModelContext();
     const other = createFlowDropInstance({ id: `t-${Math.random().toString(36).slice(2)}` });
     other.workflow.initialize(workflow());

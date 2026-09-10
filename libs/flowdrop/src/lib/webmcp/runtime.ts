@@ -262,8 +262,6 @@ export function createToolRuntime(options: ToolRuntimeOptions): ToolRuntime {
       rememberEdits: options.rememberEdits
     });
   const ownsGate = !options.gate;
-  // With a supplied gate the policy is its owner's; assume it asks.
-  const gateAsks = Boolean(options.gate) || (options.approval ?? 'confirm') !== 'auto';
   const gateRequest = (tool: string) => {
     const title = options.dialogTitle?.(editorName());
     return title === undefined ? { tool } : { tool, title };
@@ -517,7 +515,7 @@ export function createToolRuntime(options: ToolRuntimeOptions): ToolRuntime {
         skipped: [],
         mutating,
         consequential: host.consequential,
-        asks: gateAsks && mutating
+        asks: gate.asks && mutating
       };
     }
     const descriptor = byVerb.get(name);
@@ -531,7 +529,7 @@ export function createToolRuntime(options: ToolRuntimeOptions): ToolRuntime {
       skipped,
       mutating,
       consequential: false,
-      asks: gateAsks && mutating && !gate.editsPreApproved
+      asks: gate.asks && mutating && !gate.editsPreApproved
     };
   }
 

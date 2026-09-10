@@ -107,6 +107,10 @@
    */
   let legacyFallback: boolean = $state(false);
   let runtime: ToolRuntime | null = null;
+  /** True when this panel created `fd.approvalGate`, so only then may it clear it. */
+  let publishedGate = false;
+  /** Set on unmount; a turn still in flight releases the runtime when it ends. */
+  let destroyed = false;
 
   /**
    * Whether this turn drives tools. The setting asks for it, the backend
@@ -118,10 +122,29 @@
       !legacyFallback
   );
 
-  onDestroy(() => {
-    if (runtime && fd.approvalGate === runtime.gate) fd.approvalGate = null;
-    runtime?.dispose();
+  /**
+   * Let go of the runtime. The gate is cleared from the instance only when this
+   * panel published it — the registration's gate is the registration's to
+   * clear, and taking it away would leave the next panel building a second one.
+   */
+  function releaseRuntime(): void {
+    if (!runtime) return;
+    if (publishedGate && fd.approvalGate === runtime.gate) fd.approvalGate = null;
+    publishedGate = false;
+    runtime.dispose();
     runtime = null;
+  }
+
+  onDestroy(() => {
+    destroyed = true;
+    // Unpublish at once so a panel mounted after us builds its own gate; but a
+    // turn still running keeps its runtime, or the rest of its calls would
+    // answer DETACHED to a model that can see the editor is fine.
+    if (runtime && publishedGate && fd.approvalGate === runtime.gate) {
+      fd.approvalGate = null;
+      publishedGate = false;
+    }
+    if (!isLoading) releaseRuntime();
   });
 
   // =========================================================================
@@ -139,8 +162,10 @@
   // =========================================================================
 
   $effect(() => {
-    // Read scroll-relevant state so the effect re-runs when messages change
-    const _deps = [displayMessages.length, isLoading];
+    // Read scroll-relevant state so the effect re-runs when messages change —
+    // including the tool trace and reply growing on the last message.
+    const last = displayMessages[displayMessages.length - 1];
+    const _deps = [displayMessages.length, isLoading, last?.toolLines?.length, last?.content];
     tick().then(() => {
       if (messagesElement) {
         messagesElement.scrollTop = messagesElement.scrollHeight;
@@ -214,7 +239,10 @@
       messages,
       dialogTitle: (name) => messages().chat.tools.confirmTitle({ name })
     });
-    if (!shared) fd.approvalGate = runtime.gate;
+    if (!shared) {
+      fd.approvalGate = runtime.gate;
+      publishedGate = true;
+    }
     return runtime;
   }
 
@@ -371,7 +399,8 @@
     } finally {
       msg.inProgress = false;
       isLoading = false;
-      tick().then(() => inputElement?.focus());
+      if (destroyed) releaseRuntime();
+      else tick().then(() => inputElement?.focus());
     }
   }
 
