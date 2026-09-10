@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Interim model text now shows up in the trace.** A non-final `ChatTurnResponse` can carry `content` alongside `toolCalls` — text the model wrote next to its calls, e.g. "this node has no url input port". The driver emits it as a new `'note'` `TurnEvent`, and the panel renders it as an italic note line in the tool trace.
 - New tool-line status `'note'` and `DisplayMessage.warning` in `AIChatPanel.svelte`.
 
+### Changed
+
+- **The WebMCP approval dialog now looks like the rest of the editor.** `WebMCPConfirm` follows the Settings modal shell — blurred backdrop, header / body / footer on the `xl` spacing rhythm, an `lg` title, the command list as a bordered card, a 16px checkbox, an enter animation, a bottom-sheet layout under 640px — and its buttons compose on `.flowdrop-btn` (`--primary` / `--outline`) instead of one-off styles. Test ids are unchanged.
+
 ## [2.8.0] - 2026-09-09
 
 ### Added
