@@ -20,6 +20,7 @@
   import CommandConsole from '$lib/components/console/CommandConsole.svelte';
   import AIChatPanel from '$lib/components/chat/AIChatPanel.svelte';
   import TabbedSurface from '$lib/components/surfaces/TabbedSurface.svelte';
+  import type { Snippet } from 'svelte';
   import type { SurfaceTab } from '$lib/components/surfaces/TabbedSurface.svelte';
   import SurfaceOverlay from '$lib/components/surfaces/SurfaceOverlay.svelte';
   import type { UIAction } from '$lib/commands/index.js';
@@ -994,8 +995,40 @@
 
   /** Config surface has something to show (node config or workflow settings). */
   const configActive = $derived(isWorkflowSettingsOpen || !!selectedNodeForConfig);
-  /** Console/chat group is available (editable canvas, console toggled open). */
-  const consoleActive = $derived(getUiSettings().consoleOpen && canvasEditable);
+  /** The Command Console tab is offered by this mount. */
+  const consoleTabOffered = features.console;
+  /** The AI Assistant tab is offered: switched on, and a chat backend exists. */
+  const chatTabOffered = $derived(
+    features.assistant && endpointConfig?.endpoints?.chat !== undefined
+  );
+  /** At least one surface of the console/chat group is offered. */
+  const consoleGroupOffered = $derived(consoleTabOffered || chatTabOffered);
+  /** Console/chat group is available (offered, editable canvas, console toggled open). */
+  const consoleActive = $derived(
+    consoleGroupOffered && getUiSettings().consoleOpen && canvasEditable
+  );
+
+  /**
+   * The console-group tabs this mount offers, for whichever host renders them.
+   * Snippets are passed in because they are declared in the template.
+   */
+  function consoleGroupTabs(consoleBody: Snippet, chatBody: Snippet): SurfaceTab[] {
+    return [
+      ...(consoleTabOffered
+        ? [
+            {
+              id: 'console',
+              label: mergedMessages.navigation.bottomPanel.console,
+              content: consoleBody,
+              display: 'contents' as const
+            }
+          ]
+        : []),
+      ...(chatTabOffered
+        ? [{ id: 'chat', label: mergedMessages.navigation.bottomPanel.chat, content: chatBody }]
+        : [])
+    ];
+  }
   /** Node-swap sub-flow occupies the right sidebar regardless of placement. */
   const swapActive = $derived(swapMode !== 'idle');
 
@@ -1100,6 +1133,7 @@
       target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
 
     if (isInputElement) return;
+    if (!consoleGroupOffered) return;
 
     event.preventDefault();
     toggleConsole();
@@ -1381,19 +1415,7 @@
   Console + chat tabs, shared by whichever host the console group is routed to.
 -->
 {#snippet consoleChatTabs()}
-  {@const tabs = [
-    {
-      id: 'console',
-      label: mergedMessages.navigation.bottomPanel.console,
-      content: consoleSurfaceBody,
-      display: 'contents' as const
-    },
-    {
-      id: 'chat',
-      label: mergedMessages.navigation.bottomPanel.chat,
-      content: chatSurfaceBody
-    }
-  ]}
+  {@const tabs = consoleGroupTabs(consoleSurfaceBody, chatSurfaceBody)}
   <TabbedSurface {tabs} activeId={activeSurface} onSelect={selectSurface} />
 {/snippet}
 
@@ -1506,21 +1528,7 @@
                 }
               ]
             : []),
-          ...(consoleHere('sidebar')
-            ? [
-                {
-                  id: 'console',
-                  label: mergedMessages.navigation.bottomPanel.console,
-                  content: consoleSurfaceBody,
-                  display: 'contents' as const
-                },
-                {
-                  id: 'chat',
-                  label: mergedMessages.navigation.bottomPanel.chat,
-                  content: chatSurfaceBody
-                }
-              ]
-            : [])
+          ...(consoleHere('sidebar') ? consoleGroupTabs(consoleSurfaceBody, chatSurfaceBody) : [])
         ] as SurfaceTab[]}
         <TabbedSurface {tabs} activeId={activeSurface} onSelect={selectSurface} />
       {/if}
@@ -1541,21 +1549,7 @@
               }
             ]
           : []),
-        ...(consoleHere('below')
-          ? [
-              {
-                id: 'console',
-                label: mergedMessages.navigation.bottomPanel.console,
-                content: consoleSurfaceBody,
-                display: 'contents' as const
-              },
-              {
-                id: 'chat',
-                label: mergedMessages.navigation.bottomPanel.chat,
-                content: chatSurfaceBody
-              }
-            ]
-          : [])
+        ...(consoleHere('below') ? consoleGroupTabs(consoleSurfaceBody, chatSurfaceBody) : [])
       ] as SurfaceTab[]}
       <TabbedSurface {tabs} activeId={activeSurface} onSelect={selectSurface} />
     {/snippet}
@@ -1620,8 +1614,11 @@
         {refreshTrigger}
         builtinEditors={features.builtinEditors}
         gridVariant={themeConfig?.canvas?.grid ?? 'dots'}
-        consoleOpen={getUiSettings().consoleOpen}
-        onToggleConsole={toggleConsole}
+        consoleOpen={consoleActive}
+        onToggleConsole={consoleGroupOffered ? toggleConsole : undefined}
+        consoleToggleLabel={consoleTabOffered
+          ? undefined
+          : mergedMessages.navigation.bottomPanel.chat}
       />
     </div>
   </MainLayout>
@@ -1643,13 +1640,7 @@
   >
     {@const tabs = [
       { id: 'config', label: activeConfig?.title ?? 'Configuration', content: configBareContent },
-      {
-        id: 'console',
-        label: mergedMessages.navigation.bottomPanel.console,
-        content: consoleSurfaceBody,
-        display: 'contents' as const
-      },
-      { id: 'chat', label: mergedMessages.navigation.bottomPanel.chat, content: chatSurfaceBody }
+      ...consoleGroupTabs(consoleSurfaceBody, chatSurfaceBody)
     ] as SurfaceTab[]}
     <TabbedSurface {tabs} activeId={activeSurface} onSelect={selectSurface} />
   </SurfaceOverlay>
@@ -1663,7 +1654,7 @@
   </SurfaceOverlay>
 {:else if consoleHere('modal')}
   <SurfaceOverlay
-    title={activeSurface === 'chat'
+    title={activeSurface === 'chat' || !consoleTabOffered
       ? mergedMessages.navigation.bottomPanel.chat
       : mergedMessages.navigation.bottomPanel.console}
     closeLabel={mergedMessages.layout.closeConfigPanel}

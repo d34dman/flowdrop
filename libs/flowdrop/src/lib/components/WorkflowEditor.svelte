@@ -86,6 +86,8 @@
     // Console toggle
     consoleOpen?: boolean;
     onToggleConsole?: () => void;
+    /** Label of the console-group toggle; defaults to the Command Console wording. */
+    consoleToggleLabel?: string;
     /** Per-instance state container (created by mount functions). Defaults to the page-default instance. */
     instance?: FlowDropInstance;
     /**
@@ -925,7 +927,7 @@
               {#if canvasEditable && props.onToggleConsole}
                 <CanvasIconButton
                   class="flowdrop-console-toggle"
-                  label={m().layout.commandConsole}
+                  label={props.consoleToggleLabel ?? m().layout.commandConsole}
                   active={props.consoleOpen}
                   onclick={props.onToggleConsole}
                 >

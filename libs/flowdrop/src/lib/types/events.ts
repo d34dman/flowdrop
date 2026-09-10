@@ -260,6 +260,31 @@ export interface FlowDropFeatures {
    * @default true
    */
   builtinEditors?: boolean;
+
+  /**
+   * Offer the Command Console tab in the console / AI Assistant group.
+   *
+   * The console is a command line for the editor's DSL. Hosts whose users
+   * are not developers may prefer to hide it, so nobody mistakes it for a
+   * chat. When both `console` and `assistant` are off, the group's toggle
+   * button and its backtick shortcut disappear as well.
+   *
+   * @default true
+   */
+  console?: boolean;
+
+  /**
+   * Offer the AI Assistant tab in the console / AI Assistant group.
+   *
+   * Independent of this flag, the tab is only offered when the endpoint
+   * configuration carries a `chat` endpoint group — an assistant with no
+   * backend has nothing to say. Browser agents (WebMCP) do not depend on the
+   * panel: they drive the same tool runtime through the browser's model
+   * context and keep working with the assistant hidden.
+   *
+   * @default true
+   */
+  assistant?: boolean;
 }
 
 /**
@@ -272,7 +297,9 @@ export const DEFAULT_FEATURES: Required<FlowDropFeatures> = {
   autoSaveDraftInterval: 30000,
   showToasts: true,
   enableNodeSwap: true,
-  builtinEditors: true
+  builtinEditors: true,
+  console: true,
+  assistant: true
 };
 
 /**
